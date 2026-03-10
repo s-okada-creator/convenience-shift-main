@@ -28,7 +28,6 @@ import {
   CheckCircle,
   MapPin,
   Hand,
-  TrendingDown,
   Megaphone,
   UserPlus,
 } from 'lucide-react';
@@ -386,7 +385,6 @@ export function DashboardContent({ user }: DashboardContentProps) {
   const hasUrgentItems = !alertsLoading && alerts && (
     otherStoreHelpRequests.length > 0 ||
     (alerts.pendingOffersForMyRequests?.length || 0) > 0 ||
-    (alerts.staffingGaps?.length || 0) > 0 ||
     (alerts.staffHelpNotifications?.length || 0) > 0
   );
 
@@ -551,70 +549,7 @@ export function DashboardContent({ user }: DashboardContentProps) {
             </PageSection>
           )}
 
-          {/* ====== 人員不足アラート（店長向け） ====== */}
-          {user.role === 'manager' && (alerts.staffingGaps?.length || 0) > 0 && (
-            <PageSection className="!p-0 overflow-hidden">
-              <div className="bg-[#AF52DE] px-4 sm:px-6 py-3 flex items-center gap-2">
-                <TrendingDown className="w-5 h-5 text-white" />
-                <h3 className="text-white font-semibold text-sm sm:text-base">
-                  今後7日間の人員不足
-                </h3>
-              </div>
-              <div className="p-4 sm:p-6 space-y-3">
-                {alerts.staffingGaps.slice(0, 5).map((gap, i) => (
-                  <div
-                    key={`gap-${gap.date}-${i}`}
-                    className="flex items-center justify-between gap-3 p-3 rounded-xl border border-[#E5E5EA]"
-                  >
-                    <div>
-                      <p className="font-medium text-sm text-[#1D1D1F]">
-                        {formatAlertDate(gap.date)} {gap.timeSlot}
-                      </p>
-                      <p className="text-xs text-[#AF52DE] font-medium mt-0.5">
-                        最大{gap.shortage}名不足
-                      </p>
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => router.push('/dashboard/help-board/create')}
-                      className="border-[#AF52DE]/30 text-[#AF52DE] hover:bg-[#AF52DE]/10 rounded-xl shrink-0"
-                    >
-                      ヘルプ要請
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            </PageSection>
-          )}
 
-          {/* ====== オーナー向け：全店舗の本日の人員不足 ====== */}
-          {user.role === 'owner' && (alerts.allStoreGaps?.length || 0) > 0 && (
-            <PageSection className="!p-0 overflow-hidden">
-              <div className="bg-[#AF52DE] px-4 sm:px-6 py-3 flex items-center gap-2">
-                <TrendingDown className="w-5 h-5 text-white" />
-                <h3 className="text-white font-semibold text-sm sm:text-base">
-                  本日の人員不足店舗
-                </h3>
-              </div>
-              <div className="p-4 sm:p-6 space-y-3">
-                {alerts.allStoreGaps.map((gap, i) => (
-                  <div
-                    key={`all-gap-${gap.storeId}-${i}`}
-                    className="flex items-center justify-between gap-3 p-3 rounded-xl border border-[#E5E5EA]"
-                  >
-                    <div className="flex items-center gap-2">
-                      <MapPin className="w-4 h-4 text-[#AF52DE]" />
-                      <span className="font-medium text-sm text-[#1D1D1F]">{gap.storeName}</span>
-                    </div>
-                    <Badge className="bg-[#AF52DE]/10 text-[#AF52DE]">
-                      最大{gap.shortage}名不足
-                    </Badge>
-                  </div>
-                ))}
-              </div>
-            </PageSection>
-          )}
 
           {/* ====== スタッフ向け：ヘルプ募集通知 ====== */}
           {isStaff && (alerts.staffHelpNotifications?.length || 0) > 0 && (
