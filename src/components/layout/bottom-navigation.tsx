@@ -1,9 +1,9 @@
 'use client';
 
-import { memo, useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useMemo, useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Home, Calendar, CalendarDays, CalendarOff, Users, ClipboardList, Menu, X, LogOut } from 'lucide-react';
+import { Home, Calendar, CalendarDays, CalendarOff, Users, ClipboardList, Megaphone, HandHeart, Menu, X, LogOut, Plus } from 'lucide-react';
 import type { SessionUser } from '@/lib/auth';
 
 interface NavItem {
@@ -16,7 +16,7 @@ interface NavItem {
 const primaryNavItems: NavItem[] = [
   {
     href: '/dashboard',
-    label: 'ダッシュボード',
+    label: 'ホーム',
     icon: Home,
     roles: ['owner', 'manager', 'staff'],
   },
@@ -27,15 +27,15 @@ const primaryNavItems: NavItem[] = [
     roles: ['owner', 'manager', 'staff'],
   },
   {
-    href: '/dashboard/my-shifts',
-    label: 'マイシフト',
-    icon: CalendarDays,
+    href: '/dashboard/help-board',
+    label: 'ヘルプ',
+    icon: Megaphone,
     roles: ['owner', 'manager', 'staff'],
   },
   {
-    href: '/dashboard/time-off',
-    label: '休み希望',
-    icon: CalendarOff,
+    href: '/dashboard/my-shifts',
+    label: 'マイシフト',
+    icon: CalendarDays,
     roles: ['owner', 'manager', 'staff'],
   },
 ];
@@ -52,6 +52,18 @@ const menuItems: NavItem[] = [
     label: 'シフト作成',
     icon: Calendar,
     roles: ['owner', 'manager'],
+  },
+  {
+    href: '/dashboard/help-board',
+    label: 'ヘルプボード',
+    icon: Megaphone,
+    roles: ['owner', 'manager', 'staff'],
+  },
+  {
+    href: '/dashboard/extra-shifts',
+    label: '追加勤務希望',
+    icon: HandHeart,
+    roles: ['owner', 'manager', 'staff'],
   },
   {
     href: '/dashboard/staff',
@@ -82,6 +94,22 @@ const menuItems: NavItem[] = [
 export const BottomNavigation = memo(function BottomNavigation({ user }: { user: SessionUser }) {
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [openHelpCount, setOpenHelpCount] = useState(0);
+
+  useEffect(() => {
+    const fetchHelpCount = async () => {
+      try {
+        const res = await fetch('/api/help-requests?status=open');
+        if (res.ok) {
+          const data = await res.json();
+          setOpenHelpCount(data.length);
+        }
+      } catch { /* ignore */ }
+    };
+    fetchHelpCount();
+    const interval = setInterval(fetchHelpCount, 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   const filteredPrimaryItems = useMemo(
     () => primaryNavItems.filter((item) => item.roles.includes(user.role)),
@@ -119,16 +147,24 @@ export const BottomNavigation = memo(function BottomNavigation({ user }: { user:
           {filteredPrimaryItems.map((item) => {
             const Icon = item.icon;
             const active = isActiveLink(item.href);
+            const showBadge = item.href === '/dashboard/help-board' && openHelpCount > 0;
             return (
               <Link
                 key={item.href}
                 href={item.href}
                 prefetch={true}
-                className={`touch-target flex flex-col items-center justify-center gap-1 text-[10px] font-medium transition-colors ${
+                className={`touch-target flex flex-col items-center justify-center gap-1 text-[10px] font-medium transition-colors relative ${
                   active ? 'text-[#007AFF]' : 'text-[#86868B]'
                 }`}
               >
-                <Icon className={`h-5 w-5 ${active ? 'text-[#007AFF]' : 'text-[#86868B]'}`} />
+                <div className="relative">
+                  <Icon className={`h-5 w-5 ${active ? 'text-[#007AFF]' : 'text-[#86868B]'}`} />
+                  {showBadge && (
+                    <span className="absolute -top-1.5 -right-2.5 min-w-[16px] h-4 bg-[#FF3B30] text-white text-[10px] font-bold rounded-full flex items-center justify-center px-1">
+                      {openHelpCount}
+                    </span>
+                  )}
+                </div>
                 {item.label}
               </Link>
             );
@@ -189,6 +225,23 @@ export const BottomNavigation = memo(function BottomNavigation({ user }: { user:
               );
             })}
           </div>
+          {/* 緊急求人ボタン（管理者のみ） */}
+          {(user.role === 'owner' || user.role === 'manager') && (
+            <div className="mt-4">
+              <Link
+                href="/dashboard/help-board/create"
+                onClick={closeMenu}
+                className="flex items-center gap-3 w-full px-4 py-3 bg-gradient-to-r from-[#FF3B30] to-[#FF453A] text-white rounded-xl"
+              >
+                <Plus className="h-5 w-5" />
+                <div>
+                  <p className="text-sm font-bold">緊急ヘルプ求人</p>
+                  <p className="text-[10px] opacity-80">人手が足りない時はこちら</p>
+                </div>
+              </Link>
+            </div>
+          )}
+
           <div className="mt-4 border-t border-[#E5E5EA] pt-3">
             <button
               type="button"

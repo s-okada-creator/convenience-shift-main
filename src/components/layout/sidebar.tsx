@@ -10,10 +10,15 @@ import {
   ClipboardList,
   CalendarDays,
   CalendarOff,
+  Megaphone,
+  HandHeart,
   LogOut,
   ChevronRight,
+  Plus,
+  AlertTriangle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import type { SessionUser } from '@/lib/auth';
 
 interface SidebarProps {
@@ -58,6 +63,20 @@ const navItems: NavItem[] = [
     description: '時間帯別設定',
   },
   {
+    href: '/dashboard/help-board',
+    label: 'ヘルプボード',
+    icon: Megaphone,
+    roles: ['owner', 'manager', 'staff'],
+    description: '緊急ヘルプ要請',
+  },
+  {
+    href: '/dashboard/extra-shifts',
+    label: '追加勤務希望',
+    icon: HandHeart,
+    roles: ['owner', 'manager', 'staff'],
+    description: '追加で働きたい',
+  },
+  {
     href: '/dashboard/my-shifts',
     label: 'マイシフト',
     icon: CalendarDays,
@@ -82,9 +101,11 @@ const roleLabels: Record<string, string> = {
 const NavLink = memo(function NavLink({
   item,
   isActive,
+  badgeCount,
 }: {
   item: NavItem;
   isActive: boolean;
+  badgeCount?: number;
 }) {
   const Icon = item.icon;
 
@@ -108,9 +129,15 @@ const NavLink = memo(function NavLink({
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium truncate">{item.label}</p>
       </div>
-      {isActive && (
+      {badgeCount && badgeCount > 0 ? (
+        <Badge className={`text-[10px] px-1.5 min-w-[20px] justify-center ${
+          isActive ? 'bg-white/20 text-white' : 'bg-[#FF3B30] text-white'
+        }`}>
+          {badgeCount}
+        </Badge>
+      ) : isActive ? (
         <ChevronRight className="w-4 h-4 flex-shrink-0 opacity-60" />
-      )}
+      ) : null}
     </Link>
   );
 });
@@ -118,12 +145,28 @@ const NavLink = memo(function NavLink({
 export const Sidebar = memo(function Sidebar({ user }: SidebarProps) {
   const pathname = usePathname();
   const [jstNow, setJstNow] = useState<Date | null>(null);
+  const [openHelpCount, setOpenHelpCount] = useState(0);
 
   useEffect(() => {
     const tick = () => setJstNow(new Date());
     tick();
     const timer = setInterval(tick, 1000);
     return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const fetchHelpCount = async () => {
+      try {
+        const res = await fetch('/api/help-requests?status=open');
+        if (res.ok) {
+          const data = await res.json();
+          setOpenHelpCount(data.length);
+        }
+      } catch { /* ignore */ }
+    };
+    fetchHelpCount();
+    const interval = setInterval(fetchHelpCount, 30000); // 30秒ごとに更新
+    return () => clearInterval(interval);
   }, []);
 
   const formatJstDate = useCallback((date: Date) => {
@@ -190,9 +233,28 @@ export const Sidebar = memo(function Sidebar({ user }: SidebarProps) {
               key={item.href}
               item={item}
               isActive={isActiveLink(item.href)}
+              badgeCount={item.href === '/dashboard/help-board' ? openHelpCount : undefined}
             />
           ))}
         </nav>
+
+        {/* 緊急求人ボタン（管理者のみ） */}
+        {(user.role === 'owner' || user.role === 'manager') && (
+          <div className="px-3 pb-3">
+            <Link
+              href="/dashboard/help-board/create"
+              className="flex items-center gap-2 w-full px-4 py-3 bg-gradient-to-r from-[#FF3B30] to-[#FF453A] text-white rounded-xl shadow-sm hover:shadow-md transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]"
+            >
+              <div className="w-8 h-8 bg-white/20 rounded-lg flex items-center justify-center">
+                <Plus className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="text-sm font-bold">緊急ヘルプ求人</p>
+                <p className="text-[10px] opacity-80">人手が足りない時はこちら</p>
+              </div>
+            </Link>
+          </div>
+        )}
 
         {/* ユーザー情報 */}
         <div className="p-4 border-t border-[#E5E5EA]">

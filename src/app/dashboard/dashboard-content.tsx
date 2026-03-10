@@ -23,6 +23,14 @@ import {
   CalendarOff,
   Clock,
   ArrowRight,
+  AlertTriangle,
+  Bell,
+  CheckCircle,
+  MapPin,
+  Hand,
+  TrendingDown,
+  Megaphone,
+  UserPlus,
 } from 'lucide-react';
 import type { SessionUser } from '@/lib/auth';
 
@@ -49,7 +57,67 @@ interface TimeOffRequest {
   status: 'pending' | 'approved' | 'rejected';
 }
 
+interface DashboardAlerts {
+  openHelpRequests: Array<{
+    id: number;
+    storeId: number;
+    storeName: string;
+    needDate: string;
+    needStart: string;
+    needEnd: string;
+    memo: string | null;
+    status: string;
+    staffNotified: boolean;
+    createdAt: string;
+  }>;
+  pendingOffersForMyRequests: Array<{
+    helpRequestId: number;
+    storeName: string;
+    staffName: string;
+    needDate: string;
+    offerStart: string;
+    offerEnd: string;
+    type: 'store_offer' | 'staff_response';
+  }>;
+  staffingGaps: Array<{
+    date: string;
+    dayOfWeek: number;
+    timeSlot: string;
+    shortage: number;
+  }>;
+  allStoreGaps: Array<{
+    storeId: number;
+    storeName: string;
+    date: string;
+    shortage: number;
+  }>;
+  unreadCount: number;
+  recentConfirmed: Array<{
+    id: number;
+    storeName: string;
+    needDate: string;
+    needStart: string;
+    needEnd: string;
+    updatedAt: string;
+  }>;
+  staffHelpNotifications: Array<{
+    helpRequestId: number;
+    storeName: string;
+    needDate: string;
+    needStart: string;
+    needEnd: string;
+  }>;
+}
+
 const dayOfWeekLabels = ['日', '月', '火', '水', '木', '金', '土'];
+
+function formatAlertDate(dateStr: string): string {
+  const d = new Date(dateStr + 'T00:00:00');
+  const month = d.getMonth() + 1;
+  const day = d.getDate();
+  const dow = dayOfWeekLabels[d.getDay()];
+  return `${month}/${day}(${dow})`;
+}
 
 const QuickActionCard = memo(function QuickActionCard({
   title,
@@ -180,8 +248,13 @@ export function DashboardContent({ user }: DashboardContentProps) {
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [timeOffRequests, setTimeOffRequests] = useState<TimeOffRequest[]>([]);
   const [loading, setLoading] = useState(true);
+  const [alerts, setAlerts] = useState<DashboardAlerts | null>(null);
+  const [alertsLoading, setAlertsLoading] = useState(true);
+  const [openHelpCount, setOpenHelpCount] = useState(0);
+  const [openProactiveCount, setOpenProactiveCount] = useState(0);
 
   const isAdmin = user.role === 'owner' || user.role === 'manager';
+  const isStaff = user.role === 'staff';
 
   const weekDays = useMemo(() => {
     const now = new Date();
@@ -208,9 +281,52 @@ export function DashboardContent({ user }: DashboardContentProps) {
     }
   }, [weekDays]);
 
+  const fetchAlerts = useCallback(async () => {
+    setAlertsLoading(true);
+    try {
+      const res = await fetch('/api/dashboard-alerts');
+      if (res.ok) {
+        const data = await res.json();
+        setAlerts(data);
+      }
+    } catch (error) {
+      console.error('アラート取得エラー:', error);
+    } finally {
+      setAlertsLoading(false);
+    }
+  }, []);
+
+  const fetchSummaryCounts = useCallback(async () => {
+    try {
+      const [helpOpenRes, helpOfferedRes, proactiveRes] = await Promise.all([
+        fetch('/api/help-requests?status=open'),
+        fetch('/api/help-requests?status=offered'),
+        fetch('/api/proactive-offers?status=open'),
+      ]);
+      let helpCount = 0;
+      if (helpOpenRes.ok) {
+        const data = await helpOpenRes.json();
+        helpCount += data.length;
+      }
+      if (helpOfferedRes.ok) {
+        const data = await helpOfferedRes.json();
+        helpCount += data.length;
+      }
+      setOpenHelpCount(helpCount);
+      if (proactiveRes.ok) {
+        const data = await proactiveRes.json();
+        setOpenProactiveCount(data.length);
+      }
+    } catch (error) {
+      console.error('サマリーカウント取得エラー:', error);
+    }
+  }, []);
+
   useEffect(() => {
     fetchWeeklyData();
-  }, [fetchWeeklyData]);
+    fetchAlerts();
+    fetchSummaryCounts();
+  }, [fetchWeeklyData, fetchAlerts, fetchSummaryCounts]);
 
   const getShiftForDate = useCallback(
     (date: Date): Shift | undefined => {
@@ -248,6 +364,32 @@ export function DashboardContent({ user }: DashboardContentProps) {
     };
   }, [shifts]);
 
+  // 他店からのヘルプ要請（自分の店以外）
+  const otherStoreHelpRequests = useMemo(() => {
+    if (!alerts) return [];
+    return alerts.openHelpRequests.filter(r => {
+      if (user.role === 'owner') return true;
+      return r.storeId !== user.storeId;
+    });
+  }, [alerts, user]);
+
+  // 自店のヘルプ要請
+  const myStoreHelpRequests = useMemo(() => {
+    if (!alerts) return [];
+    return alerts.openHelpRequests.filter(r => {
+      if (user.role === 'owner') return true;
+      return r.storeId === user.storeId;
+    });
+  }, [alerts, user]);
+
+  // 何かアクションが必要か
+  const hasUrgentItems = !alertsLoading && alerts && (
+    otherStoreHelpRequests.length > 0 ||
+    (alerts.pendingOffersForMyRequests?.length || 0) > 0 ||
+    (alerts.staffingGaps?.length || 0) > 0 ||
+    (alerts.staffHelpNotifications?.length || 0) > 0
+  );
+
   return (
     <DashboardLayout
       user={user}
@@ -260,6 +402,295 @@ export function DashboardContent({ user }: DashboardContentProps) {
           : '自分のシフトと予定を確認'
       }
     >
+      {/* サマリーカード（人手不足 + 追加勤務希望） */}
+      <div className="grid grid-cols-2 gap-4 mb-6">
+        <div
+          onClick={() => router.push('/dashboard/help-board')}
+          className="bg-white rounded-2xl shadow-sm border border-[#E5E5EA] p-4 cursor-pointer transition-all duration-200 hover:shadow-md hover:border-[#FF3B30] active:scale-[0.99]"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-[#FF3B30]/10 flex items-center justify-center">
+              <AlertTriangle className="w-5 h-5 text-[#FF3B30]" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-[#86868B] font-medium">人手不足アラート</p>
+              <p className="text-lg font-bold text-[#FF3B30]">
+                {openHelpCount > 0 ? (
+                  <>未解決のヘルプ要請 <span className="text-2xl">{openHelpCount}</span>件</>
+                ) : (
+                  <span className="text-[#34C759] text-sm font-medium">問題なし</span>
+                )}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div
+          onClick={() => router.push('/dashboard/extra-shifts')}
+          className="bg-white rounded-2xl shadow-sm border border-[#E5E5EA] p-4 cursor-pointer transition-all duration-200 hover:shadow-md hover:border-[#34C759] active:scale-[0.99]"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-[#34C759]/10 flex items-center justify-center">
+              <UserPlus className="w-5 h-5 text-[#34C759]" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-[#86868B] font-medium">追加勤務可能スタッフ</p>
+              <p className="text-lg font-bold text-[#34C759]">
+                {openProactiveCount > 0 ? (
+                  <>働きたいスタッフ <span className="text-2xl">{openProactiveCount}</span>名</>
+                ) : (
+                  <span className="text-[#86868B] text-sm font-medium">なし</span>
+                )}
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ========================================= */}
+      {/* お知らせ・アクション必要セクション */}
+      {/* ========================================= */}
+      {alertsLoading ? (
+        <div className="mb-6">
+          <div className="h-32 bg-[#F5F5F7] rounded-2xl animate-pulse" />
+        </div>
+      ) : alerts && hasUrgentItems ? (
+        <div className="mb-6 space-y-4">
+          {/* ====== 他店からのヘルプ要請（店長・オーナー向け） ====== */}
+          {isAdmin && otherStoreHelpRequests.length > 0 && (
+            <PageSection className="!p-0 overflow-hidden">
+              <div className="bg-[#FF3B30] px-4 sm:px-6 py-3 flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-white" />
+                <h3 className="text-white font-semibold text-sm sm:text-base">
+                  ヘルプを求めている店舗があります
+                </h3>
+                <Badge className="bg-white/20 text-white ml-auto">
+                  {otherStoreHelpRequests.length}件
+                </Badge>
+              </div>
+              <div className="p-4 sm:p-6 space-y-3">
+                {otherStoreHelpRequests.slice(0, 3).map((req) => (
+                  <div
+                    key={req.id}
+                    onClick={() => router.push(`/dashboard/help-board/${req.id}`)}
+                    className="flex items-center justify-between gap-3 p-3 rounded-xl border border-[#E5E5EA] hover:border-[#FF3B30]/30 hover:bg-[#FF3B30]/5 cursor-pointer transition-all"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <MapPin className="w-4 h-4 text-[#FF3B30] shrink-0" />
+                        <span className="font-semibold text-sm text-[#1D1D1F]">{req.storeName}</span>
+                        {req.status === 'open' && (
+                          <Badge className="bg-[#FF3B30]/10 text-[#FF3B30] text-[10px]">緊急</Badge>
+                        )}
+                      </div>
+                      <p className="text-sm text-[#86868B] ml-6">
+                        {formatAlertDate(req.needDate)} {req.needStart}〜{req.needEnd}
+                        {req.memo && ` / ${req.memo}`}
+                      </p>
+                    </div>
+                    <ArrowRight className="w-4 h-4 text-[#86868B] shrink-0" />
+                  </div>
+                ))}
+                {otherStoreHelpRequests.length > 3 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => router.push('/dashboard/help-board')}
+                    className="w-full border-[#E5E5EA] text-[#86868B]"
+                  >
+                    すべてのヘルプ要請を見る ({otherStoreHelpRequests.length}件)
+                  </Button>
+                )}
+              </div>
+            </PageSection>
+          )}
+
+          {/* ====== 確認待ちのオファー・応募（自店の要請への回答） ====== */}
+          {isAdmin && (alerts.pendingOffersForMyRequests?.length || 0) > 0 && (
+            <PageSection className="!p-0 overflow-hidden">
+              <div className="bg-[#FF9500] px-4 sm:px-6 py-3 flex items-center gap-2">
+                <Bell className="w-5 h-5 text-white" />
+                <h3 className="text-white font-semibold text-sm sm:text-base">
+                  確認待ちのオファーがあります
+                </h3>
+                <Badge className="bg-white/20 text-white ml-auto">
+                  {alerts.pendingOffersForMyRequests.length}件
+                </Badge>
+              </div>
+              <div className="p-4 sm:p-6 space-y-3">
+                {alerts.pendingOffersForMyRequests.map((offer, i) => (
+                  <div
+                    key={`${offer.helpRequestId}-${offer.staffName}-${i}`}
+                    onClick={() => router.push(`/dashboard/help-board/${offer.helpRequestId}`)}
+                    className="flex items-center justify-between gap-3 p-3 rounded-xl border border-[#E5E5EA] hover:border-[#FF9500]/30 hover:bg-[#FF9500]/5 cursor-pointer transition-all"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        {offer.type === 'store_offer' ? (
+                          <MapPin className="w-4 h-4 text-[#FF9500] shrink-0" />
+                        ) : (
+                          <Hand className="w-4 h-4 text-[#FF9500] shrink-0" />
+                        )}
+                        <span className="font-semibold text-sm text-[#1D1D1F]">
+                          {offer.type === 'store_offer'
+                            ? `${offer.storeName}から ${offer.staffName}さん`
+                            : `${offer.staffName}さんが応募`
+                          }
+                        </span>
+                      </div>
+                      <p className="text-sm text-[#86868B] ml-6">
+                        {formatAlertDate(offer.needDate)} {offer.offerStart}〜{offer.offerEnd}
+                      </p>
+                    </div>
+                    <Button size="sm" className="bg-[#FF9500] hover:bg-[#E68600] text-white rounded-xl shrink-0">
+                      確認する
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </PageSection>
+          )}
+
+          {/* ====== 人員不足アラート（店長向け） ====== */}
+          {user.role === 'manager' && (alerts.staffingGaps?.length || 0) > 0 && (
+            <PageSection className="!p-0 overflow-hidden">
+              <div className="bg-[#AF52DE] px-4 sm:px-6 py-3 flex items-center gap-2">
+                <TrendingDown className="w-5 h-5 text-white" />
+                <h3 className="text-white font-semibold text-sm sm:text-base">
+                  今後7日間の人員不足
+                </h3>
+              </div>
+              <div className="p-4 sm:p-6 space-y-3">
+                {alerts.staffingGaps.slice(0, 5).map((gap, i) => (
+                  <div
+                    key={`gap-${gap.date}-${i}`}
+                    className="flex items-center justify-between gap-3 p-3 rounded-xl border border-[#E5E5EA]"
+                  >
+                    <div>
+                      <p className="font-medium text-sm text-[#1D1D1F]">
+                        {formatAlertDate(gap.date)} {gap.timeSlot}
+                      </p>
+                      <p className="text-xs text-[#AF52DE] font-medium mt-0.5">
+                        最大{gap.shortage}名不足
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => router.push('/dashboard/help-board/create')}
+                      className="border-[#AF52DE]/30 text-[#AF52DE] hover:bg-[#AF52DE]/10 rounded-xl shrink-0"
+                    >
+                      ヘルプ要請
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </PageSection>
+          )}
+
+          {/* ====== オーナー向け：全店舗の本日の人員不足 ====== */}
+          {user.role === 'owner' && (alerts.allStoreGaps?.length || 0) > 0 && (
+            <PageSection className="!p-0 overflow-hidden">
+              <div className="bg-[#AF52DE] px-4 sm:px-6 py-3 flex items-center gap-2">
+                <TrendingDown className="w-5 h-5 text-white" />
+                <h3 className="text-white font-semibold text-sm sm:text-base">
+                  本日の人員不足店舗
+                </h3>
+              </div>
+              <div className="p-4 sm:p-6 space-y-3">
+                {alerts.allStoreGaps.map((gap, i) => (
+                  <div
+                    key={`all-gap-${gap.storeId}-${i}`}
+                    className="flex items-center justify-between gap-3 p-3 rounded-xl border border-[#E5E5EA]"
+                  >
+                    <div className="flex items-center gap-2">
+                      <MapPin className="w-4 h-4 text-[#AF52DE]" />
+                      <span className="font-medium text-sm text-[#1D1D1F]">{gap.storeName}</span>
+                    </div>
+                    <Badge className="bg-[#AF52DE]/10 text-[#AF52DE]">
+                      最大{gap.shortage}名不足
+                    </Badge>
+                  </div>
+                ))}
+              </div>
+            </PageSection>
+          )}
+
+          {/* ====== スタッフ向け：ヘルプ募集通知 ====== */}
+          {isStaff && (alerts.staffHelpNotifications?.length || 0) > 0 && (
+            <PageSection className="!p-0 overflow-hidden">
+              <div className="bg-[#007AFF] px-4 sm:px-6 py-3 flex items-center gap-2">
+                <Megaphone className="w-5 h-5 text-white" />
+                <h3 className="text-white font-semibold text-sm sm:text-base">
+                  ヘルプスタッフ募集中
+                </h3>
+                <Badge className="bg-white/20 text-white ml-auto">
+                  {alerts.staffHelpNotifications.length}件
+                </Badge>
+              </div>
+              <div className="p-4 sm:p-6 space-y-3">
+                {alerts.staffHelpNotifications.map((notif, i) => (
+                  <div
+                    key={`staff-notif-${notif.helpRequestId}-${i}`}
+                    onClick={() => router.push(`/dashboard/help-board/${notif.helpRequestId}`)}
+                    className="flex items-center justify-between gap-3 p-3 rounded-xl border border-[#E5E5EA] hover:border-[#007AFF]/30 hover:bg-[#007AFF]/5 cursor-pointer transition-all"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <MapPin className="w-4 h-4 text-[#007AFF] shrink-0" />
+                        <span className="font-semibold text-sm text-[#1D1D1F]">{notif.storeName}</span>
+                      </div>
+                      <p className="text-sm text-[#86868B] ml-6">
+                        {formatAlertDate(notif.needDate)} {notif.needStart}〜{notif.needEnd}
+                      </p>
+                    </div>
+                    <Button size="sm" className="bg-[#007AFF] hover:bg-[#0056b3] text-white rounded-xl shrink-0">
+                      応募する
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </PageSection>
+          )}
+
+          {/* ====== 最近確定したヘルプ ====== */}
+          {(alerts.recentConfirmed?.length || 0) > 0 && (
+            <PageSection>
+              <div className="flex items-center gap-2 mb-3">
+                <CheckCircle className="w-5 h-5 text-[#34C759]" />
+                <h3 className="font-semibold text-sm text-[#1D1D1F]">最近のヘルプ確定</h3>
+              </div>
+              <div className="space-y-2">
+                {alerts.recentConfirmed.map((item) => (
+                  <div
+                    key={item.id}
+                    onClick={() => router.push(`/dashboard/help-board/${item.id}`)}
+                    className="flex items-center gap-3 p-2 rounded-lg hover:bg-[#F5F5F7] cursor-pointer transition-colors"
+                  >
+                    <Badge className="bg-[#34C759]/10 text-[#34C759] text-[10px] shrink-0">確定</Badge>
+                    <span className="text-sm text-[#1D1D1F]">
+                      {item.storeName} {formatAlertDate(item.needDate)} {item.needStart}〜{item.needEnd}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </PageSection>
+          )}
+        </div>
+      ) : !alertsLoading && (
+        <PageSection className="mb-6">
+          <div className="flex items-center gap-3 py-2">
+            <div className="w-10 h-10 rounded-xl bg-[#34C759]/10 flex items-center justify-center">
+              <CheckCircle className="w-5 h-5 text-[#34C759]" />
+            </div>
+            <div>
+              <p className="font-medium text-[#1D1D1F]">対応が必要なお知らせはありません</p>
+              <p className="text-sm text-[#86868B]">現在、すべて順調です</p>
+            </div>
+          </div>
+        </PageSection>
+      )}
+
       {/* 統計カード */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <PageSection className="!p-3 sm:!p-4">

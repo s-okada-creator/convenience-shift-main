@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { login, DEMO_USERS } from '@/lib/auth';
 import { rateLimit, RateLimitPresets, getClientIp } from '@/lib/rate-limit';
+import { db } from '@/lib/db';
+import { stores, staff } from '@/lib/db/schema';
+import { eq, and } from 'drizzle-orm';
 
 export async function POST(request: NextRequest) {
   try {
@@ -39,7 +42,30 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const user = await login(userKey as keyof typeof DEMO_USERS);
+    // DBから実際の店舗ID・スタッフIDを取得してセッションに反映
+    const demoUser = DEMO_USERS[userKey as keyof typeof DEMO_USERS];
+    const storeNameMap: Record<number, string> = { 1: '寝屋川A店', 2: '寝屋川B店', 3: '寝屋川C店' };
+    let resolvedStoreId: number | null = demoUser.storeId;
+    let resolvedUserId: number | null = null;
+
+    if (demoUser.storeId && storeNameMap[demoUser.storeId]) {
+      const [dbStore] = await db.select().from(stores).where(eq(stores.name, storeNameMap[demoUser.storeId]));
+      if (dbStore) {
+        resolvedStoreId = dbStore.id;
+      }
+    }
+
+    // staffテーブルから名前でIDを解決
+    const [dbStaff] = await db.select().from(staff).where(eq(staff.name, demoUser.name));
+    if (dbStaff) {
+      resolvedUserId = dbStaff.id;
+      // storeIdもstaffレコードから取得（より確実）
+      if (demoUser.role !== 'owner') {
+        resolvedStoreId = dbStaff.storeId;
+      }
+    }
+
+    const user = await login(userKey as keyof typeof DEMO_USERS, resolvedStoreId, resolvedUserId);
 
     return NextResponse.json(
       { user },

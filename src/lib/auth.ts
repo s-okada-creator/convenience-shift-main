@@ -5,33 +5,33 @@ import { createHmac, timingSafeEqual } from 'crypto';
 export const DEMO_USERS = {
   owner: {
     id: 1,
-    name: '山田太郎',
+    name: '畑山オーナー',
     role: 'owner' as const,
     storeId: null, // オーナーは全店舗アクセス可能
   },
   manager1: {
     id: 2,
-    name: '佐藤花子',
+    name: '寝屋川A店長',
     role: 'manager' as const,
-    storeId: 1, // 渋谷店
+    storeId: 1, // 寝屋川A店
   },
   manager2: {
     id: 3,
-    name: '鈴木一郎',
+    name: '寝屋川B店長',
     role: 'manager' as const,
-    storeId: 2, // 新宿店
+    storeId: 2, // 寝屋川B店
   },
   manager3: {
     id: 4,
-    name: '高橋美咲',
+    name: '寝屋川C店長',
     role: 'manager' as const,
-    storeId: 3, // 池袋店
+    storeId: 3, // 寝屋川C店
   },
   staff1: {
     id: 5,
     name: '田中健太',
     role: 'staff' as const,
-    storeId: 1, // 渋谷店
+    storeId: 1, // 寝屋川A店
   },
 } as const;
 
@@ -101,13 +101,13 @@ export async function getSession(): Promise<SessionUser | null> {
 }
 
 // ログイン
-export async function login(userKey: keyof typeof DEMO_USERS): Promise<SessionUser> {
+export async function login(userKey: keyof typeof DEMO_USERS, overrideStoreId?: number | null, overrideUserId?: number | null): Promise<SessionUser> {
   const user = DEMO_USERS[userKey];
   const sessionUser: SessionUser = {
-    id: user.id,
+    id: overrideUserId ?? user.id,
     name: user.name,
     role: user.role,
-    storeId: user.storeId,
+    storeId: overrideStoreId !== undefined ? overrideStoreId : user.storeId,
   };
 
   const cookieStore = await cookies();
