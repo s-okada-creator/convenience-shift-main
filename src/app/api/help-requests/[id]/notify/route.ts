@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { helpRequests, staff, stores, shifts, timeOffRequests, availabilityPatterns, notifications } from '@/lib/db/schema';
 import { eq, and, ne, or } from 'drizzle-orm';
-import { requireAdmin, canAccessStore } from '@/lib/auth';
+import { requireAdmin } from '@/lib/auth';
 import { handleApiError, ApiErrors } from '@/lib/api-error';
 
 interface RouteParams {
@@ -42,11 +42,6 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const [helpRequest] = await db.select().from(helpRequests).where(eq(helpRequests.id, requestId));
     if (!helpRequest) {
       throw ApiErrors.notFound('ヘルプ要請');
-    }
-
-    // 要請元の店舗の管理者のみ通知可能
-    if (!canAccessStore(session, helpRequest.storeId)) {
-      throw ApiErrors.forbidden();
     }
 
     // 既に通知済みの場合はエラー
