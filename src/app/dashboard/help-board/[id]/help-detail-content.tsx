@@ -453,7 +453,7 @@ export function HelpDetailContent({ user, helpRequestId }: HelpDetailContentProp
   );
 
   const handleNotifyStaff = useCallback(async () => {
-    if (!confirm('条件に合うスタッフにDiscord通知を送信しますか？')) return;
+    if (!confirm('条件に合うスタッフにLINE通知を送信しますか？')) return;
     setNotifying(true);
     try {
       const res = await fetch(`/api/help-requests/${helpRequestId}/notify`, {

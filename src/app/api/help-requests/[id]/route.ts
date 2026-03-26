@@ -4,7 +4,7 @@ import { helpRequests, helpOffers, staffHelpResponses, stores, staff, notificati
 import { eq, and, or } from 'drizzle-orm';
 import { requireAdmin, getSession, canAccessStore } from '@/lib/auth';
 import { handleApiError, ApiErrors } from '@/lib/api-error';
-import { sendDiscordNotification, formatDateForDiscord } from '@/lib/discord';
+import { formatDateForLine, notifyAllManagers } from '@/lib/line';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -176,10 +176,10 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
         await db.insert(notifications).values(notificationRecords);
       }
 
-      // Discord通知
-      const formattedDate = formatDateForDiscord(existing.needDate);
-      const discordMessage = `⚪【取り下げ】${store?.name || ''}の ${formattedDate} ${existing.needStart.slice(0, 5)}〜${existing.needEnd.slice(0, 5)} のヘルプ要請が取り下げられました`;
-      await sendDiscordNotification(discordMessage);
+      // LINE通知
+      const formattedDate = formatDateForLine(existing.needDate);
+      const lineMessage = `⚪【取り下げ】${store?.name || ''}の ${formattedDate} ${existing.needStart.slice(0, 5)}〜${existing.needEnd.slice(0, 5)} のヘルプ要請が取り下げられました`;
+      await notifyAllManagers(lineMessage);
     }
 
     return NextResponse.json(updated);

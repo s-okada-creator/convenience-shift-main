@@ -4,7 +4,7 @@ import { helpRequests, staff, stores, shifts, timeOffRequests, availabilityPatte
 import { eq, and, ne, or } from 'drizzle-orm';
 import { requireAdmin } from '@/lib/auth';
 import { handleApiError, ApiErrors } from '@/lib/api-error';
-import { sendStoreDiscordNotification, formatDateForDiscord } from '@/lib/discord';
+import { formatDateForLine, notifyStaffMultiple } from '@/lib/line';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -140,32 +140,23 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       .set({ staffNotified: true, updatedAt: new Date() })
       .where(eq(helpRequests.id, requestId));
 
-    // Discord通知送信（各店舗チャンネルへ）
+    // LINE通知送信（対象スタッフへ直接）
     const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://convenience-shift-main.vercel.app';
-    const formattedDate = formatDateForDiscord(helpRequest.needDate);
+    const formattedDate = formatDateForLine(helpRequest.needDate);
     const timeRange = `${helpRequest.needStart.slice(0, 5)}〜${helpRequest.needEnd.slice(0, 5)}`;
 
-    // 対象スタッフの所属店舗IDを重複なく取得
-    const targetStoreIds = [...new Set(notifiedStaff.map(s => s.storeId))];
+    const lineMessage = [
+      `📢【ヘルプ募集】${store?.name || ''}が人手を求めています！`,
+      ``,
+      `📅 ${formattedDate} ${timeRange}`,
+      helpRequest.memo ? `📝 ${helpRequest.memo}` : null,
+      ``,
+      `✅ 行ける方はアプリから応募してください👇`,
+      `🔗 ${appUrl}/dashboard/help-board/${requestId}`,
+    ].filter(Boolean).join('\n');
 
-    for (const storeId of targetStoreIds) {
-      const storeStaff = notifiedStaff.filter(s => s.storeId === storeId);
-      const staffNames = storeStaff.map(s => s.name).join('、');
-
-      const storeMessage = [
-        `📢【ヘルプ募集】${store?.name || ''}が人手を求めています！`,
-        ``,
-        `📅 ${formattedDate} ${timeRange}`,
-        helpRequest.memo ? `📝 ${helpRequest.memo}` : null,
-        ``,
-        `💪 対象: ${staffNames}さん`,
-        ``,
-        `✅ 行ける方はこちらから応募してください👇`,
-        `🔗 ${appUrl}/dashboard/help-board/${requestId}`,
-      ].filter(Boolean).join('\n');
-
-      await sendStoreDiscordNotification(storeId, storeMessage);
-    }
+    const staffIds = notifiedStaff.map(s => s.id);
+    await notifyStaffMultiple(staffIds, lineMessage);
 
     return NextResponse.json({
       success: true,

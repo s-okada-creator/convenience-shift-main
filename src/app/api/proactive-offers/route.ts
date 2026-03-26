@@ -4,7 +4,7 @@ import { proactiveOffers, stores, staff, notifications } from '@/lib/db/schema';
 import { eq, and, gte, lte, or } from 'drizzle-orm';
 import { getSession, canAccessStore } from '@/lib/auth';
 import { handleApiError, ApiErrors } from '@/lib/api-error';
-import { sendDiscordNotification, formatDateForDiscord } from '@/lib/discord';
+import { formatDateForLine, notifyAllManagers } from '@/lib/line';
 
 const normalizeTime = <T extends { availableStart: string; availableEnd: string }>(row: T) => ({
   ...row,
@@ -190,10 +190,10 @@ export async function POST(request: NextRequest) {
       await db.insert(notifications).values(notificationRecords);
     }
 
-    // Discord通知
-    const formattedDate = formatDateForDiscord(availableDate);
-    const discordMessage = `🟢【追加勤務希望】${staffInfo.name}さん（${store.name}）が ${formattedDate} ${availableStart.slice(0, 5)}〜${availableEnd.slice(0, 5)} 勤務可能です${memo ? ' / ' + memo : ''}`;
-    await sendDiscordNotification(discordMessage);
+    // LINE通知
+    const formattedDate = formatDateForLine(availableDate);
+    const lineMessage = `🟢【追加勤務希望】${staffInfo.name}さん（${store.name}）が ${formattedDate} ${availableStart.slice(0, 5)}〜${availableEnd.slice(0, 5)} 勤務可能です${memo ? ' / ' + memo : ''}`;
+    await notifyAllManagers(lineMessage);
 
     return NextResponse.json(normalizeTime(newOffer), { status: 201 });
   } catch (error) {

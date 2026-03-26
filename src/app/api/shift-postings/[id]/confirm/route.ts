@@ -4,7 +4,7 @@ import { shiftPostings, shiftApplications, shifts, stores, staff } from '@/lib/d
 import { eq, and } from 'drizzle-orm';
 import { requireAdmin, canAccessStore } from '@/lib/auth';
 import { handleApiError, ApiErrors } from '@/lib/api-error';
-import { sendDiscordNotification, formatDateForDiscord } from '@/lib/discord';
+import { formatDateForLine, notifyStoreManagers, notifyStaff } from '@/lib/line';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -92,15 +92,17 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       isHelpFromOtherStore: false,
     });
 
-    // Discord通知
+    // LINE通知
     try {
       const [store] = await db.select().from(stores).where(eq(stores.id, posting.storeId));
       const [confirmedStaff] = await db.select().from(staff).where(eq(staff.id, application.staffId));
-      const formattedDate = formatDateForDiscord(posting.date);
-      const discordMessage = `\u{1F7E2}【求人確定】${store?.name || ''}の ${formattedDate} ${posting.startTime.slice(0, 5)}\u301C${posting.endTime.slice(0, 5)} に ${confirmedStaff?.name || ''}さんが確定しました`;
-      await sendDiscordNotification(discordMessage);
-    } catch (discordError) {
-      console.error('Discord通知エラー（確定自体は成功）:', discordError);
+      const formattedDate = formatDateForLine(posting.date);
+      const lineMessage = `🟢【求人確定】${store?.name || ''}の ${formattedDate} ${posting.startTime.slice(0, 5)}〜${posting.endTime.slice(0, 5)} に ${confirmedStaff?.name || ''}さんが確定しました\n\nシフトが自動登録されました`;
+      await notifyStoreManagers(posting.storeId, lineMessage);
+      // 確定されたスタッフ本人にも通知
+      await notifyStaff(application.staffId, `✅ ${store?.name || ''}のシフトに確定しました\n${formattedDate} ${posting.startTime.slice(0, 5)}〜${posting.endTime.slice(0, 5)}\nシフトが自動登録されました`);
+    } catch (lineError) {
+      console.error('LINE通知エラー（確定自体は成功）:', lineError);
     }
 
     return NextResponse.json({

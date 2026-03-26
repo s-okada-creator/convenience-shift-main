@@ -1,4 +1,7 @@
 // LINE Messaging API プッシュ通知
+import { db } from '@/lib/db';
+import { staff, stores } from '@/lib/db/schema';
+import { eq, and, ne, inArray } from 'drizzle-orm';
 
 export function formatDateForLine(dateStr: string): string {
   const [year, month, day] = dateStr.split('-');
@@ -36,31 +39,63 @@ export async function sendLinePushMessage(
   }
 }
 
-// ヘルプ要請のLINE通知（複数の店長に送信）
-export async function sendLineHelpRequestNotification(
-  lineUserIds: string[],
-  storeName: string,
-  needDate: string,
-  needStart: string,
-  needEnd: string,
-  memo: string | null
-): Promise<void> {
-  if (lineUserIds.length === 0) return;
-
-  const formattedDate = formatDateForLine(needDate);
-  const message = [
-    `【緊急ヘルプ】${storeName}`,
-    `${formattedDate} ${needStart}〜${needEnd}`,
-    `人員要請が届きました`,
-    `メモ: ${memo || 'なし'}`,
-  ].join('\n');
+// 複数ユーザーにLINE通知を一括送信
+async function sendLineToMultiple(lineUserIds: string[], message: string): Promise<void> {
+  const ids = lineUserIds.filter(Boolean);
+  if (ids.length === 0) return;
 
   const results = await Promise.allSettled(
-    lineUserIds.map((id) => sendLinePushMessage(id, message))
+    ids.map((id) => sendLinePushMessage(id, message))
   );
 
   const failures = results.filter((r) => r.status === 'rejected');
   if (failures.length > 0) {
-    console.error(`LINE通知: ${lineUserIds.length}件中${failures.length}件失敗`);
+    console.error(`LINE通知: ${ids.length}件中${failures.length}件失敗`);
   }
+}
+
+// 全店長・オーナーにLINE通知
+export async function notifyAllManagers(message: string): Promise<void> {
+  const managers = await db.select({ lineUserId: staff.lineUserId })
+    .from(staff)
+    .where(inArray(staff.role, ['owner', 'manager']));
+  const ids = managers.map(m => m.lineUserId).filter((id): id is string => !!id);
+  await sendLineToMultiple(ids, message);
+}
+
+// 特定店舗の店長にLINE通知
+export async function notifyStoreManagers(storeId: number, message: string): Promise<void> {
+  const managers = await db.select({ lineUserId: staff.lineUserId })
+    .from(staff)
+    .where(and(
+      eq(staff.storeId, storeId),
+      inArray(staff.role, ['owner', 'manager'])
+    ));
+  // オーナーも通知（全店舗管轄）
+  const owners = await db.select({ lineUserId: staff.lineUserId })
+    .from(staff)
+    .where(eq(staff.role, 'owner'));
+  const allIds = [...managers, ...owners].map(m => m.lineUserId).filter((id): id is string => !!id);
+  const uniqueIds = [...new Set(allIds)];
+  await sendLineToMultiple(uniqueIds, message);
+}
+
+// 特定スタッフにLINE通知（staffId指定）
+export async function notifyStaff(staffId: number, message: string): Promise<void> {
+  const [s] = await db.select({ lineUserId: staff.lineUserId })
+    .from(staff)
+    .where(eq(staff.id, staffId));
+  if (s?.lineUserId) {
+    await sendLinePushMessage(s.lineUserId, message);
+  }
+}
+
+// 複数スタッフにLINE通知（staffId配列指定）
+export async function notifyStaffMultiple(staffIds: number[], message: string): Promise<void> {
+  if (staffIds.length === 0) return;
+  const staffList = await db.select({ lineUserId: staff.lineUserId })
+    .from(staff)
+    .where(inArray(staff.id, staffIds));
+  const ids = staffList.map(s => s.lineUserId).filter((id): id is string => !!id);
+  await sendLineToMultiple(ids, message);
 }

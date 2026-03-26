@@ -4,7 +4,7 @@ import { shiftPostings, shiftApplications, stores, staff } from '@/lib/db/schema
 import { eq, and } from 'drizzle-orm';
 import { requireAuth } from '@/lib/auth';
 import { handleApiError, ApiErrors } from '@/lib/api-error';
-import { sendDiscordNotification, formatDateForDiscord } from '@/lib/discord';
+import { formatDateForLine, notifyStoreManagers } from '@/lib/line';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -65,15 +65,15 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       .from(shiftApplications)
       .where(eq(shiftApplications.postingId, postingId));
 
-    // Discord通知
+    // LINE通知
     try {
       const [store] = await db.select().from(stores).where(eq(stores.id, posting.storeId));
       const [applicant] = await db.select().from(staff).where(eq(staff.id, session.id));
-      const formattedDate = formatDateForDiscord(posting.date);
-      const discordMessage = `\u{1F7E1}【求人応募】${applicant?.name || session.name}さんが ${store?.name || ''}の ${formattedDate} ${posting.startTime.slice(0, 5)}\u301C${posting.endTime.slice(0, 5)} に応募しました`;
-      await sendDiscordNotification(discordMessage);
-    } catch (discordError) {
-      console.error('Discord通知エラー（応募自体は成功）:', discordError);
+      const formattedDate = formatDateForLine(posting.date);
+      const lineMessage = `🟡【求人応募】${applicant?.name || session.name}さんが ${store?.name || ''}の ${formattedDate} ${posting.startTime.slice(0, 5)}〜${posting.endTime.slice(0, 5)} に応募しました\n\n👉 アプリで確認・確定してください`;
+      await notifyStoreManagers(posting.storeId, lineMessage);
+    } catch (lineError) {
+      console.error('LINE通知エラー（応募自体は成功）:', lineError);
     }
 
     return NextResponse.json({

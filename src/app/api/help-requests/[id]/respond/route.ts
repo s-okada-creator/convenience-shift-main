@@ -4,7 +4,7 @@ import { helpRequests, staffHelpResponses, staff, stores, notifications } from '
 import { eq, and, or } from 'drizzle-orm';
 import { requireAuth } from '@/lib/auth';
 import { handleApiError, ApiErrors } from '@/lib/api-error';
-import { sendDiscordNotification, sendStoreDiscordNotification, formatDateForDiscord } from '@/lib/discord';
+import { formatDateForLine, notifyStoreManagers } from '@/lib/line';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -115,21 +115,13 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       await db.insert(notifications).values(notificationRecords);
     }
 
-    // Discord通知（失敗しても応募自体は成功とする）
+    // LINE通知（失敗しても応募自体は成功とする）
     try {
-      const formattedDate = formatDateForDiscord(helpRequest.needDate);
-      const discordMessage = `🟡【スタッフ応募】${staffMember?.name || session.name}さん（${staffStore?.name || ''}）が ${store?.name || ''}の ${formattedDate} ${offerStart}〜${offerEnd} に「出れます」と応募しました`;
-
-      // 全体チャンネル（@everyone で全員に通知）
-      await sendDiscordNotification(discordMessage, true);
-      // 要請元の店舗チャンネル
-      await sendStoreDiscordNotification(helpRequest.storeId, `📩 ${discordMessage}\n\n👉 アプリで確認・確定してください`);
-      // 応募スタッフの所属店舗チャンネル（別店舗の場合）
-      if (session.storeId && session.storeId !== helpRequest.storeId) {
-        await sendStoreDiscordNotification(session.storeId, `📤 ${staffMember?.name || session.name}さんが${store?.name || ''}のヘルプに応募しました（${formattedDate} ${offerStart}〜${offerEnd}）`);
-      }
-    } catch (discordError) {
-      console.error('Discord通知エラー（応募自体は成功）:', discordError);
+      const formattedDate = formatDateForLine(helpRequest.needDate);
+      const lineMessage = `🟡【スタッフ応募】${staffMember?.name || session.name}さん（${staffStore?.name || ''}）が ${store?.name || ''}の ${formattedDate} ${offerStart}〜${offerEnd} に「出れます」と応募しました\n\n👉 アプリで確認・確定してください`;
+      await notifyStoreManagers(helpRequest.storeId, lineMessage);
+    } catch (lineError) {
+      console.error('LINE通知エラー（応募自体は成功）:', lineError);
     }
 
     return NextResponse.json({

@@ -4,8 +4,7 @@ import { helpRequests, stores, staff, notifications } from '@/lib/db/schema';
 import { eq, and, gte, lte, or } from 'drizzle-orm';
 import { requireAdmin, getSession, canAccessStore } from '@/lib/auth';
 import { handleApiError, ApiErrors } from '@/lib/api-error';
-import { sendDiscordNotification, formatDateForDiscord } from '@/lib/discord';
-import { sendLineHelpRequestNotification } from '@/lib/line';
+import { formatDateForLine, notifyAllManagers } from '@/lib/line';
 
 const normalizeTime = <T extends { needStart: string; needEnd: string }>(row: T) => ({
   ...row,
@@ -161,31 +160,16 @@ export async function POST(request: NextRequest) {
       console.error('通知レコード作成エラー（要請自体は成功）:', notifError);
     }
 
-    // Discord通知送信（失敗してもヘルプ要請は成功とする）
+    // LINE通知送信（失敗してもヘルプ要請は成功とする）
     try {
-      const formattedDate = formatDateForDiscord(needDate);
-      const discordMessage = `🔴【緊急ヘルプ】${store.name}より ${formattedDate} ${needStart.slice(0, 5)}〜${needEnd.slice(0, 5)} の人員要請が届きました\nメモ: ${memo || 'なし'}`;
-      await sendDiscordNotification(discordMessage, true);
-    } catch (discordError) {
-      console.error('Discord通知エラー（要請自体は成功）:', discordError);
-    }
-
-    // LINE通知送信：自分以外の店長にプッシュ通知（失敗してもヘルプ要請は成功とする）
-    try {
-      const lineUserIds = managers
-        .filter((m) => m.id !== session.id && m.lineUserId)
-        .map((m) => m.lineUserId!);
-
-      if (lineUserIds.length > 0) {
-        await sendLineHelpRequestNotification(
-          lineUserIds,
-          store.name,
-          needDate,
-          needStart.slice(0, 5),
-          needEnd.slice(0, 5),
-          memo || null
-        );
-      }
+      const formattedDate = formatDateForLine(needDate);
+      const lineMessage = [
+        `🔴【緊急ヘルプ】${store.name}`,
+        `${formattedDate} ${needStart.slice(0, 5)}〜${needEnd.slice(0, 5)}`,
+        `人員要請が届きました`,
+        memo ? `メモ: ${memo}` : null,
+      ].filter(Boolean).join('\n');
+      await notifyAllManagers(lineMessage);
     } catch (lineError) {
       console.error('LINE通知エラー（要請自体は成功）:', lineError);
     }

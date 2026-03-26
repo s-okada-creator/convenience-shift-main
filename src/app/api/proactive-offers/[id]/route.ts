@@ -4,7 +4,7 @@ import { proactiveOffers, stores, staff, shifts, notifications } from '@/lib/db/
 import { eq, or } from 'drizzle-orm';
 import { getSession, canAccessStore } from '@/lib/auth';
 import { handleApiError, ApiErrors } from '@/lib/api-error';
-import { sendDiscordNotification } from '@/lib/discord';
+import { formatDateForLine, notifyAllManagers, notifyStaff } from '@/lib/line';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -193,14 +193,12 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
         await db.insert(notifications).values(notificationRecords);
       }
 
-      // Discord通知
-      const [year, month, day] = existing.availableDate.split('-');
-      const dateObj = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
-      const weekdays = ['日', '月', '火', '水', '木', '金', '土'];
-      const formattedDate = `${parseInt(month)}/${parseInt(day)}（${weekdays[dateObj.getDay()]}）`;
-
-      const discordMessage = `【勤務確定】${staffInfo?.name || ''}さんが${acceptingStore?.name || ''}で ${formattedDate} ${existing.availableStart.slice(0, 5)}〜${existing.availableEnd.slice(0, 5)} 勤務確定`;
-      await sendDiscordNotification(discordMessage);
+      // LINE通知
+      const formattedDate = formatDateForLine(existing.availableDate);
+      const lineMessage = `🟢【勤務確定】${staffInfo?.name || ''}さんが${acceptingStore?.name || ''}で ${formattedDate} ${existing.availableStart.slice(0, 5)}〜${existing.availableEnd.slice(0, 5)} 勤務確定`;
+      await notifyAllManagers(lineMessage);
+      // スタッフ本人にも通知
+      await notifyStaff(existing.staffId, `✅ ${acceptingStore?.name || ''}での勤務が確定しました\n${formattedDate} ${existing.availableStart.slice(0, 5)}〜${existing.availableEnd.slice(0, 5)}`);
 
       return NextResponse.json(normalizeTime(updated));
     }
