@@ -48,7 +48,7 @@ export async function GET() {
     // ============================
     // 2. 自店舗のヘルプ要請への応答（オファー・スタッフ応募）
     // ============================
-    let pendingOffersForMyRequests: Array<{
+    const pendingOffersForMyRequests: Array<{
       helpRequestId: number;
       storeName: string;
       staffName: string;
@@ -299,7 +299,7 @@ export async function GET() {
     }
 
     // オーナーの場合は全店舗の不足を取得
-    let allStoreGaps: Array<{
+    const allStoreGaps: Array<{
       storeId: number;
       storeName: string;
       date: string;

@@ -1,7 +1,7 @@
 // LINE Messaging API プッシュ通知
 import { db } from '@/lib/db';
-import { staff, stores } from '@/lib/db/schema';
-import { eq, and, ne, inArray } from 'drizzle-orm';
+import { staff } from '@/lib/db/schema';
+import { eq, and, inArray } from 'drizzle-orm';
 
 export function formatDateForLine(dateStr: string): string {
   const [year, month, day] = dateStr.split('-');
