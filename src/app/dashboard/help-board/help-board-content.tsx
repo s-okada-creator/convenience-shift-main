@@ -20,6 +20,7 @@ import {
   MessageSquare,
   Plus,
   Inbox,
+  Hand,
 } from 'lucide-react';
 import type { SessionUser } from '@/lib/auth';
 
@@ -103,10 +104,14 @@ const StatusBadge = memo(function StatusBadge({ status }: { status: string }) {
 const HelpRequestCard = memo(function HelpRequestCard({
   request,
   onClick,
+  isStaff,
 }: {
   request: HelpRequest;
   onClick: () => void;
+  isStaff: boolean;
 }) {
+  const canApply = isStaff && (request.status === 'open' || request.status === 'offered');
+
   return (
     <div
       onClick={onClick}
@@ -145,12 +150,25 @@ const HelpRequestCard = memo(function HelpRequestCard({
           </div>
         </div>
 
-        <div className="text-right shrink-0">
+        <div className="flex flex-col items-end gap-2 shrink-0">
           <p className="text-xs text-[#86868B]">{getRelativeTime(request.createdAt)}</p>
+          {canApply && (
+            <Button
+              size="sm"
+              className="bg-[#007AFF] hover:bg-[#0056b3] text-white rounded-xl text-xs"
+              onClick={(e) => {
+                e.stopPropagation();
+                onClick();
+              }}
+            >
+              <Hand className="w-3.5 h-3.5 mr-1" />
+              応募する
+            </Button>
+          )}
         </div>
       </div>
 
-      {request.staffNotified && (
+      {request.staffNotified && !canApply && (
         <div className="mt-3 pt-3 border-t border-[#E5E5EA]">
           <span className="text-xs font-medium text-[#007AFF]">
             スタッフ通知済み
@@ -340,6 +358,7 @@ export function HelpBoardContent({ user }: HelpBoardContentProps) {
                 key={request.id}
                 request={request}
                 onClick={() => handleCardClick(request.id)}
+                isStaff={user.role === 'staff'}
               />
             ))}
           </div>

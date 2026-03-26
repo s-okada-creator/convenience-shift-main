@@ -3,7 +3,7 @@
 import { memo, useCallback, useMemo, useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Home, Calendar, CalendarDays, CalendarOff, Users, ClipboardList, Megaphone, HandHeart, Menu, X, LogOut, Plus } from 'lucide-react';
+import { Home, Calendar, CalendarDays, CalendarOff, Users, ClipboardList, Megaphone, HandHeart, Briefcase, Menu, X, LogOut, Plus } from 'lucide-react';
 import type { SessionUser } from '@/lib/auth';
 
 interface NavItem {
@@ -60,9 +60,9 @@ const menuItems: NavItem[] = [
     roles: ['owner', 'manager', 'staff'],
   },
   {
-    href: '/dashboard/extra-shifts',
-    label: '追加勤務希望',
-    icon: HandHeart,
+    href: '/dashboard/shift-board',
+    label: 'シフト求人',
+    icon: Briefcase,
     roles: ['owner', 'manager', 'staff'],
   },
   {
@@ -241,6 +241,21 @@ export const BottomNavigation = memo(function BottomNavigation({ user }: { user:
               </Link>
             </div>
           )}
+
+          {/* 追加で働きたいボタン（全ロール） */}
+          <div className="mt-2">
+            <Link
+              href="/dashboard/extra-shifts/create"
+              onClick={closeMenu}
+              className="flex items-center gap-3 w-full px-4 py-3 bg-gradient-to-r from-[#34C759] to-[#30D158] text-white rounded-xl"
+            >
+              <HandHeart className="h-5 w-5" />
+              <div>
+                <p className="text-sm font-bold">追加で働きたい！</p>
+                <p className="text-[10px] opacity-80">シフトを増やしたい方はこちら</p>
+              </div>
+            </Link>
+          </div>
 
           <div className="mt-4 border-t border-[#E5E5EA] pt-3">
             <button

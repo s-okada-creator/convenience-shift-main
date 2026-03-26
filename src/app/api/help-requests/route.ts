@@ -5,6 +5,7 @@ import { eq, and, gte, lte, or } from 'drizzle-orm';
 import { requireAdmin, getSession, canAccessStore } from '@/lib/auth';
 import { handleApiError, ApiErrors } from '@/lib/api-error';
 import { sendDiscordNotification, formatDateForDiscord } from '@/lib/discord';
+import { sendLineHelpRequestNotification } from '@/lib/line';
 
 const normalizeTime = <T extends { needStart: string; needEnd: string }>(row: T) => ({
   ...row,
@@ -127,15 +128,16 @@ export async function POST(request: NextRequest) {
       staffNotified: false,
     }).returning();
 
+    // マネージャー・オーナー一覧取得（通知レコード作成 + LINE通知で使用）
+    const managers = await db
+      .select({ id: staff.id, lineUserId: staff.lineUserId })
+      .from(staff)
+      .where(
+        or(eq(staff.role, 'owner'), eq(staff.role, 'manager'))
+      );
+
     // 全マネージャー・オーナーに通知レコードを作成（失敗してもヘルプ要請は成功とする）
     try {
-      const managers = await db
-        .select({ id: staff.id })
-        .from(staff)
-        .where(
-          or(eq(staff.role, 'owner'), eq(staff.role, 'manager'))
-        );
-
       const notificationRecords = managers
         .filter((m) => m.id !== session.id)
         .map((m) => ({
@@ -166,6 +168,26 @@ export async function POST(request: NextRequest) {
       await sendDiscordNotification(discordMessage, true);
     } catch (discordError) {
       console.error('Discord通知エラー（要請自体は成功）:', discordError);
+    }
+
+    // LINE通知送信：自分以外の店長にプッシュ通知（失敗してもヘルプ要請は成功とする）
+    try {
+      const lineUserIds = managers
+        .filter((m) => m.id !== session.id && m.lineUserId)
+        .map((m) => m.lineUserId!);
+
+      if (lineUserIds.length > 0) {
+        await sendLineHelpRequestNotification(
+          lineUserIds,
+          store.name,
+          needDate,
+          needStart.slice(0, 5),
+          needEnd.slice(0, 5),
+          memo || null
+        );
+      }
+    } catch (lineError) {
+      console.error('LINE通知エラー（要請自体は成功）:', lineError);
     }
 
     return NextResponse.json(normalizeTime(newRequest), { status: 201 });

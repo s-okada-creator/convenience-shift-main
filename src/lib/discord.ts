@@ -5,6 +5,7 @@ export function formatDateForDiscord(dateStr: string): string {
   return `${parseInt(month)}/${parseInt(day)}（${weekdays[dateObj.getDay()]}）`;
 }
 
+// 全体チャンネルへの通知（ヘルプ募集など全員向け）
 export async function sendDiscordNotification(message: string, mentionEveryone = false): Promise<void> {
   const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
   if (!webhookUrl) {
@@ -23,5 +24,26 @@ export async function sendDiscordNotification(message: string, mentionEveryone =
     }
   } catch (error) {
     console.error('Discord notification failed:', error);
+  }
+}
+
+// 店舗専用チャンネルへの通知（応募・確定など店長向け）
+export async function sendStoreDiscordNotification(storeId: number, message: string): Promise<void> {
+  const webhookUrl = process.env[`DISCORD_WEBHOOK_STORE_${storeId}`];
+  if (!webhookUrl) {
+    console.error(`DISCORD_WEBHOOK_STORE_${storeId} is not set`);
+    return;
+  }
+  try {
+    const response = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: message }),
+    });
+    if (!response.ok) {
+      console.error(`Discord store ${storeId} webhook error:`, await response.text());
+    }
+  } catch (error) {
+    console.error(`Discord store ${storeId} notification failed:`, error);
   }
 }

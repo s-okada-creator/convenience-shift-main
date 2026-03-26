@@ -12,6 +12,7 @@ import {
   CalendarOff,
   Megaphone,
   HandHeart,
+  Briefcase,
   LogOut,
   ChevronRight,
   Plus,
@@ -70,11 +71,11 @@ const navItems: NavItem[] = [
     description: '緊急ヘルプ要請',
   },
   {
-    href: '/dashboard/extra-shifts',
-    label: '追加勤務希望',
-    icon: HandHeart,
+    href: '/dashboard/shift-board',
+    label: 'シフト求人',
+    icon: Briefcase,
     roles: ['owner', 'manager', 'staff'],
-    description: '追加で働きたい',
+    description: 'シフト求人に応募',
   },
   {
     href: '/dashboard/my-shifts',
@@ -240,7 +241,7 @@ export const Sidebar = memo(function Sidebar({ user }: SidebarProps) {
 
         {/* 緊急求人ボタン（管理者のみ） */}
         {(user.role === 'owner' || user.role === 'manager') && (
-          <div className="px-3 pb-3">
+          <div className="px-3 pb-2">
             <Link
               href="/dashboard/help-board/create"
               className="flex items-center gap-2 w-full px-4 py-3 bg-gradient-to-r from-[#FF3B30] to-[#FF453A] text-white rounded-xl shadow-sm hover:shadow-md transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]"
@@ -255,6 +256,22 @@ export const Sidebar = memo(function Sidebar({ user }: SidebarProps) {
             </Link>
           </div>
         )}
+
+        {/* 追加で働きたいボタン（全ロール） */}
+        <div className="px-3 pb-3">
+          <Link
+            href="/dashboard/extra-shifts/create"
+            className="flex items-center gap-2 w-full px-4 py-3 bg-gradient-to-r from-[#34C759] to-[#30D158] text-white rounded-xl shadow-sm hover:shadow-md transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]"
+          >
+            <div className="w-8 h-8 bg-white/20 rounded-lg flex items-center justify-center">
+              <HandHeart className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="text-sm font-bold">追加で働きたい！</p>
+              <p className="text-[10px] opacity-80">シフトを増やしたい方はこちら</p>
+            </div>
+          </Link>
+        </div>
 
         {/* ユーザー情報 */}
         <div className="p-4 border-t border-[#E5E5EA]">

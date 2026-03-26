@@ -4,7 +4,7 @@ import { helpRequests, staffHelpResponses, staff, stores, notifications } from '
 import { eq, and, or } from 'drizzle-orm';
 import { requireAuth } from '@/lib/auth';
 import { handleApiError, ApiErrors } from '@/lib/api-error';
-import { sendDiscordNotification, formatDateForDiscord } from '@/lib/discord';
+import { sendDiscordNotification, sendStoreDiscordNotification, formatDateForDiscord } from '@/lib/discord';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -38,11 +38,6 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     // 受付可能なステータスかチェック
     if (helpRequest.status === 'confirmed' || helpRequest.status === 'withdrawn' || helpRequest.status === 'closed') {
       throw ApiErrors.badRequest('このヘルプ要請には応募できません');
-    }
-
-    // 自店舗のヘルプ要請にはスタッフ応募不可
-    if (session.storeId === helpRequest.storeId) {
-      throw ApiErrors.badRequest('自店舗のヘルプ要請には応募できません');
     }
 
     // 重複応募チェック
@@ -120,11 +115,22 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       await db.insert(notifications).values(notificationRecords);
     }
 
-    // Discord通知
-    const formattedDate = formatDateForDiscord(helpRequest.needDate);
-    const discordMessage = `🟡【スタッフ応募】${staffMember?.name || session.name}さんが ${store?.name || ''}の ${formattedDate} ${offerStart}〜${offerEnd} に「出れます」と応募しました`;
+    // Discord通知（失敗しても応募自体は成功とする）
+    try {
+      const formattedDate = formatDateForDiscord(helpRequest.needDate);
+      const discordMessage = `🟡【スタッフ応募】${staffMember?.name || session.name}さん（${staffStore?.name || ''}）が ${store?.name || ''}の ${formattedDate} ${offerStart}〜${offerEnd} に「出れます」と応募しました`;
 
-    await sendDiscordNotification(discordMessage);
+      // 全体チャンネル（@everyone で全員に通知）
+      await sendDiscordNotification(discordMessage, true);
+      // 要請元の店舗チャンネル
+      await sendStoreDiscordNotification(helpRequest.storeId, `📩 ${discordMessage}\n\n👉 アプリで確認・確定してください`);
+      // 応募スタッフの所属店舗チャンネル（別店舗の場合）
+      if (session.storeId && session.storeId !== helpRequest.storeId) {
+        await sendStoreDiscordNotification(session.storeId, `📤 ${staffMember?.name || session.name}さんが${store?.name || ''}のヘルプに応募しました（${formattedDate} ${offerStart}〜${offerEnd}）`);
+      }
+    } catch (discordError) {
+      console.error('Discord通知エラー（応募自体は成功）:', discordError);
+    }
 
     return NextResponse.json({
       ...response,

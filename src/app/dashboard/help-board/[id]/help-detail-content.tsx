@@ -369,10 +369,9 @@ export function HelpDetailContent({ user, helpRequestId }: HelpDetailContentProp
   const canNotifyStaff =
     isAdmin && !request?.staffNotified && request?.status !== 'withdrawn' && request?.status !== 'closed' && request?.status !== 'confirmed';
 
-  // スタッフが応募可能か判定
+  // スタッフが応募可能か判定（同じ店舗でもOK）
   const canRespond =
     isStaff &&
-    isOtherStore &&
     (request?.status === 'open' || request?.status === 'offered') &&
     !staffResponses.some(r => r.staffId === user.id && r.status === 'pending');
 
@@ -771,8 +770,8 @@ export function HelpDetailContent({ user, helpRequestId }: HelpDetailContentProp
             </PageSection>
           )}
 
-          {/* スタッフ応募フォーム（スタッフのみ・他店の要請のみ） */}
-          {isStaff && isOtherStore && (
+          {/* スタッフ応募フォーム */}
+          {isStaff && (
             <PageSection>
               <h3 className="text-lg font-semibold text-[#1D1D1F] mb-4 flex items-center gap-2">
                 <Hand className="w-5 h-5" />

@@ -4,7 +4,7 @@ import { helpRequests, staffHelpResponses, shifts, stores, staff, notifications 
 import { eq, and, ne, or } from 'drizzle-orm';
 import { requireAdmin, canAccessStore } from '@/lib/auth';
 import { handleApiError, ApiErrors } from '@/lib/api-error';
-import { sendDiscordNotification, formatDateForDiscord } from '@/lib/discord';
+import { sendDiscordNotification, sendStoreDiscordNotification, formatDateForDiscord } from '@/lib/discord';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -30,8 +30,8 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       throw ApiErrors.notFound('ヘルプ要請');
     }
 
-    // 要請元の店舗の管理者のみ確定可能
-    if (!canAccessStore(session, helpRequest.storeId)) {
+    // 要請元の店舗の管理者 or オーナーのみ確定可能
+    if (session.role !== 'owner' && session.storeId !== helpRequest.storeId) {
       throw ApiErrors.forbidden();
     }
 
@@ -137,7 +137,14 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const formattedDate = formatDateForDiscord(helpRequest.needDate);
     const discordMessage = `🟢【確定】${requestStore?.name || ''}の ${formattedDate} ${staffResponse.offerStart.slice(0, 5)}〜${staffResponse.offerEnd.slice(0, 5)} のヘルプが確定しました（${responseStaff?.name || ''}さん応募）`;
 
+    // 全体チャンネル
     await sendDiscordNotification(discordMessage);
+    // 要請元の店舗チャンネル
+    await sendStoreDiscordNotification(helpRequest.storeId, `✅ ${discordMessage}\n\nシフトが自動登録されました`);
+    // 応募スタッフの所属店舗チャンネル
+    if (responseStaff && responseStaff.storeId !== helpRequest.storeId) {
+      await sendStoreDiscordNotification(responseStaff.storeId, `✅ ${responseStaff.name}さんが${requestStore?.name || ''}のヘルプに確定しました（${formattedDate} ${staffResponse.offerStart.slice(0, 5)}〜${staffResponse.offerEnd.slice(0, 5)}）`);
+    }
 
     return NextResponse.json({
       success: true,

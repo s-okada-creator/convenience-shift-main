@@ -52,10 +52,17 @@ export async function GET() {
       helpRequestId: number;
       storeName: string;
       staffName: string;
+      staffStoreName: string;
       needDate: string;
       offerStart: string;
       offerEnd: string;
       type: 'store_offer' | 'staff_response';
+      offerId: number | null;
+      responseId: number | null;
+      message: string | null;
+      isPartial: boolean;
+      requestNeedStart: string;
+      requestNeedEnd: string;
     }> = [];
 
     // 自分が作った or 自店舗のヘルプ要請を取得
@@ -67,15 +74,18 @@ export async function GET() {
 
     if (myStoreRequestIds.length > 0) {
       // 店舗オファー（pending）
+      // storesテーブルをスタッフ所属店舗用にエイリアスとして使うため、サブクエリで取得
       for (const reqId of myStoreRequestIds) {
         const pendingOffers = await db
           .select({
             id: helpOffers.id,
             requestId: helpOffers.requestId,
+            staffId: helpOffers.staffId,
             staffName: staff.name,
             storeName: stores.name,
             offerStart: helpOffers.offerStart,
             offerEnd: helpOffers.offerEnd,
+            isPartial: helpOffers.isPartial,
           })
           .from(helpOffers)
           .leftJoin(staff, eq(helpOffers.staffId, staff.id))
@@ -88,15 +98,43 @@ export async function GET() {
           );
 
         const request = myStoreRequests.find(r => r.id === reqId);
+
+        // スタッフの所属店舗名を取得
         for (const offer of pendingOffers) {
+          let staffStoreName = offer.storeName || '';
+          if (offer.staffId) {
+            const staffRecord = await db
+              .select({ storeId: staff.storeId })
+              .from(staff)
+              .where(eq(staff.id, offer.staffId))
+              .limit(1);
+            if (staffRecord.length > 0) {
+              const staffStore = await db
+                .select({ name: stores.name })
+                .from(stores)
+                .where(eq(stores.id, staffRecord[0].storeId))
+                .limit(1);
+              if (staffStore.length > 0) {
+                staffStoreName = staffStore[0].name;
+              }
+            }
+          }
+
           pendingOffersForMyRequests.push({
             helpRequestId: reqId,
             storeName: offer.storeName || '',
             staffName: offer.staffName || '',
+            staffStoreName,
             needDate: request?.needDate || '',
             offerStart: offer.offerStart.slice(0, 5),
             offerEnd: offer.offerEnd.slice(0, 5),
             type: 'store_offer',
+            offerId: offer.id,
+            responseId: null,
+            message: null,
+            isPartial: offer.isPartial,
+            requestNeedStart: request?.needStart?.slice(0, 5) || '',
+            requestNeedEnd: request?.needEnd?.slice(0, 5) || '',
           });
         }
 
@@ -105,9 +143,13 @@ export async function GET() {
           .select({
             id: staffHelpResponses.id,
             requestId: staffHelpResponses.requestId,
+            staffId: staffHelpResponses.staffId,
             staffName: staff.name,
+            staffStoreId: staff.storeId,
             offerStart: staffHelpResponses.offerStart,
             offerEnd: staffHelpResponses.offerEnd,
+            isPartial: staffHelpResponses.isPartial,
+            message: staffHelpResponses.message,
           })
           .from(staffHelpResponses)
           .leftJoin(staff, eq(staffHelpResponses.staffId, staff.id))
@@ -119,14 +161,33 @@ export async function GET() {
           );
 
         for (const resp of pendingResponses) {
+          let staffStoreName = '';
+          if (resp.staffStoreId) {
+            const staffStore = await db
+              .select({ name: stores.name })
+              .from(stores)
+              .where(eq(stores.id, resp.staffStoreId))
+              .limit(1);
+            if (staffStore.length > 0) {
+              staffStoreName = staffStore[0].name;
+            }
+          }
+
           pendingOffersForMyRequests.push({
             helpRequestId: reqId,
             storeName: '',
             staffName: resp.staffName || '',
+            staffStoreName,
             needDate: request?.needDate || '',
             offerStart: resp.offerStart.slice(0, 5),
             offerEnd: resp.offerEnd.slice(0, 5),
             type: 'staff_response',
+            offerId: null,
+            responseId: resp.id,
+            message: resp.message,
+            isPartial: resp.isPartial,
+            requestNeedStart: request?.needStart?.slice(0, 5) || '',
+            requestNeedEnd: request?.needEnd?.slice(0, 5) || '',
           });
         }
       }

@@ -50,3 +50,4 @@ gh run view <RUN_ID> --log-failed
 |------|------|---------|
 | DATABASE_URL | NeonDB接続 | .env.local, GitHub Secrets, Vercel |
 | DISCORD_WEBHOOK_URL | Discord通知 | .env.local, Vercel |
+| LINE_CHANNEL_ACCESS_TOKEN | LINE Messaging API通知 | .env.local, Vercel |

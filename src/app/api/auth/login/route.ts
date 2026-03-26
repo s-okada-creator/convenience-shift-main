@@ -55,13 +55,29 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // staffテーブルから名前でIDを解決
-    const [dbStaff] = await db.select().from(staff).where(eq(staff.name, demoUser.name));
-    if (dbStaff) {
-      resolvedUserId = dbStaff.id;
-      // storeIdもstaffレコードから取得（より確実）
+    // staffテーブルからIDを解決
+    // まず名前で検索
+    const [dbStaffByName] = await db.select().from(staff).where(eq(staff.name, demoUser.name));
+    if (dbStaffByName) {
+      resolvedUserId = dbStaffByName.id;
       if (demoUser.role !== 'owner') {
-        resolvedStoreId = dbStaff.storeId;
+        resolvedStoreId = dbStaffByName.storeId;
+      }
+    } else if (resolvedStoreId) {
+      // 名前が見つからない場合、同じ店舗・同じロールのスタッフから最初の1人を取得
+      const [dbStaffByRole] = await db
+        .select()
+        .from(staff)
+        .where(
+          and(
+            eq(staff.storeId, resolvedStoreId),
+            eq(staff.role, demoUser.role)
+          )
+        )
+        .limit(1);
+      if (dbStaffByRole) {
+        resolvedUserId = dbStaffByRole.id;
+        resolvedStoreId = dbStaffByRole.storeId;
       }
     }
 

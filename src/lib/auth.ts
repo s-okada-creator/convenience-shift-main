@@ -11,25 +11,25 @@ export const DEMO_USERS = {
   },
   manager1: {
     id: 2,
-    name: '寝屋川A店長',
+    name: '山田太郎',
     role: 'manager' as const,
     storeId: 1, // 寝屋川A店
   },
   manager2: {
     id: 3,
-    name: '寝屋川B店長',
+    name: '佐藤花子',
     role: 'manager' as const,
     storeId: 2, // 寝屋川B店
   },
   manager3: {
     id: 4,
-    name: '寝屋川C店長',
+    name: '鈴木一郎',
     role: 'manager' as const,
     storeId: 3, // 寝屋川C店
   },
   staff1: {
     id: 5,
-    name: '田中健太',
+    name: '高橋健太',
     role: 'staff' as const,
     storeId: 1, // 寝屋川A店
   },

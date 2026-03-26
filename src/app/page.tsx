@@ -16,10 +16,10 @@ interface DemoUser {
 
 const demoUsers: DemoUser[] = [
   { key: 'owner', name: '畑山オーナー', role: 'オーナー', store: '全店舗' },
-  { key: 'manager1', name: '寝屋川A店長', role: '店長', store: '寝屋川A店' },
-  { key: 'manager2', name: '寝屋川B店長', role: '店長', store: '寝屋川B店' },
-  { key: 'manager3', name: '寝屋川C店長', role: '店長', store: '寝屋川C店' },
-  { key: 'staff1', name: '田中健太', role: 'スタッフ', store: '寝屋川A店' },
+  { key: 'manager1', name: '山田太郎', role: '店長', store: '寝屋川A店' },
+  { key: 'manager2', name: '佐藤花子', role: '店長', store: '寝屋川B店' },
+  { key: 'manager3', name: '鈴木一郎', role: '店長', store: '寝屋川C店' },
+  { key: 'staff1', name: '高橋健太', role: 'スタッフ', store: '寝屋川A店' },
 ];
 
 export default function LoginPage() {

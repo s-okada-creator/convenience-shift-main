@@ -4,7 +4,7 @@ import { helpRequests, helpOffers, stores, staff } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { requireAdmin, canAccessStore } from '@/lib/auth';
 import { handleApiError, ApiErrors } from '@/lib/api-error';
-import { sendDiscordNotification, formatDateForDiscord } from '@/lib/discord';
+import { sendDiscordNotification, sendStoreDiscordNotification, formatDateForDiscord } from '@/lib/discord';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -123,6 +123,12 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const formattedDate = formatDateForDiscord(helpRequest.needDate);
     const discordMessage = `🟡【申し出】${offeringStore?.name || ''}の${staffMember.name}さんが ${requestingStore?.name || ''}の ${formattedDate} ${offerStart.slice(0, 5)}〜${offerEnd.slice(0, 5)} に対応可能です`;
     await sendDiscordNotification(discordMessage);
+    // 要請元の店舗チャンネルに通知
+    await sendStoreDiscordNotification(helpRequest.storeId, `📩 ${discordMessage}\n\n👉 アプリで確認・確定してください`);
+    // オファー元の店舗チャンネルにも通知
+    if (offeringStoreId !== helpRequest.storeId) {
+      await sendStoreDiscordNotification(offeringStoreId, `📤 ${staffMember.name}さんを${requestingStore?.name || ''}のヘルプにオファーしました（${formattedDate} ${offerStart.slice(0, 5)}〜${offerEnd.slice(0, 5)}）`);
+    }
 
     return NextResponse.json({
       ...newOffer,

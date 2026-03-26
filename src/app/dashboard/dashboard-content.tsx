@@ -27,7 +27,6 @@ import {
   Bell,
   CheckCircle,
   MapPin,
-  Hand,
   Megaphone,
   UserPlus,
 } from 'lucide-react';
@@ -73,22 +72,17 @@ interface DashboardAlerts {
     helpRequestId: number;
     storeName: string;
     staffName: string;
+    staffStoreName: string;
     needDate: string;
     offerStart: string;
     offerEnd: string;
     type: 'store_offer' | 'staff_response';
-  }>;
-  staffingGaps: Array<{
-    date: string;
-    dayOfWeek: number;
-    timeSlot: string;
-    shortage: number;
-  }>;
-  allStoreGaps: Array<{
-    storeId: number;
-    storeName: string;
-    date: string;
-    shortage: number;
+    offerId: number | null;
+    responseId: number | null;
+    message: string | null;
+    isPartial: boolean;
+    requestNeedStart: string;
+    requestNeedEnd: string;
   }>;
   unreadCount: number;
   recentConfirmed: Array<{
@@ -251,6 +245,7 @@ export function DashboardContent({ user }: DashboardContentProps) {
   const [alertsLoading, setAlertsLoading] = useState(true);
   const [openHelpCount, setOpenHelpCount] = useState(0);
   const [openProactiveCount, setOpenProactiveCount] = useState(0);
+  const [confirmingId, setConfirmingId] = useState<number | null>(null);
 
   const isAdmin = user.role === 'owner' || user.role === 'manager';
   const isStaff = user.role === 'staff';
@@ -321,6 +316,56 @@ export function DashboardContent({ user }: DashboardContentProps) {
     }
   }, []);
 
+  const handleQuickConfirm = useCallback(async (
+    helpRequestId: number,
+    type: 'store_offer' | 'staff_response',
+    offerId?: number | null,
+    responseId?: number | null,
+    staffName?: string,
+  ) => {
+    if (!confirm(`${staffName}さんを確定しますか？シフトが自動登録されます。`)) return;
+    setConfirmingId(offerId || responseId || 0);
+    try {
+      const endpoint = type === 'store_offer'
+        ? `/api/help-requests/${helpRequestId}/confirm`
+        : `/api/help-requests/${helpRequestId}/confirm-response`;
+      const body = type === 'store_offer' ? { offerId } : { responseId };
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) {
+        fetchAlerts();
+        fetchSummaryCounts();
+      } else {
+        const error = await res.json();
+        alert(error.error || '確定に失敗しました');
+      }
+    } catch {
+      alert('確定に失敗しました');
+    } finally {
+      setConfirmingId(null);
+    }
+  }, [fetchAlerts, fetchSummaryCounts]);
+
+  const handleNotify = useCallback(async (helpRequestId: number) => {
+    try {
+      const res = await fetch(`/api/help-requests/${helpRequestId}/notify`, {
+        method: 'POST',
+      });
+      if (res.ok) {
+        fetchAlerts();
+        alert('スタッフに通知しました');
+      } else {
+        const error = await res.json();
+        alert(error.error || '通知に失敗しました');
+      }
+    } catch {
+      alert('通知に失敗しました');
+    }
+  }, [fetchAlerts]);
+
   useEffect(() => {
     fetchWeeklyData();
     fetchAlerts();
@@ -366,10 +411,7 @@ export function DashboardContent({ user }: DashboardContentProps) {
   // 他店からのヘルプ要請（自分の店以外）
   const otherStoreHelpRequests = useMemo(() => {
     if (!alerts) return [];
-    return alerts.openHelpRequests.filter(r => {
-      if (user.role === 'owner') return true;
-      return r.storeId !== user.storeId;
-    });
+    return alerts.openHelpRequests.filter(r => r.storeId !== user.storeId);
   }, [alerts, user]);
 
   // 自店のヘルプ要請
@@ -381,10 +423,21 @@ export function DashboardContent({ user }: DashboardContentProps) {
     });
   }, [alerts, user]);
 
+  // 自店の各求人への応募数をカウント
+  const offerCountByRequest = useMemo(() => {
+    if (!alerts) return new Map<number, number>();
+    const counts = new Map<number, number>();
+    for (const offer of alerts.pendingOffersForMyRequests) {
+      counts.set(offer.helpRequestId, (counts.get(offer.helpRequestId) || 0) + 1);
+    }
+    return counts;
+  }, [alerts]);
+
   // 何かアクションが必要か
   const hasUrgentItems = !alertsLoading && alerts && (
-    otherStoreHelpRequests.length > 0 ||
     (alerts.pendingOffersForMyRequests?.length || 0) > 0 ||
+    myStoreHelpRequests.length > 0 ||
+    otherStoreHelpRequests.length > 0 ||
     (alerts.staffHelpNotifications?.length || 0) > 0
   );
 
@@ -454,42 +507,202 @@ export function DashboardContent({ user }: DashboardContentProps) {
         </div>
       ) : alerts && hasUrgentItems ? (
         <div className="mb-6 space-y-4">
-          {/* ====== 他店からのヘルプ要請（店長・オーナー向け） ====== */}
-          {isAdmin && otherStoreHelpRequests.length > 0 && (
+          {/* ====== エリア1: 対応が必要です（確認待ちオファー・応募） ====== */}
+          {isAdmin && (alerts.pendingOffersForMyRequests?.length || 0) > 0 && (
+            <PageSection className="!p-0 overflow-hidden">
+              <div className="bg-[#FF9500] px-4 sm:px-6 py-3 flex items-center gap-2">
+                <Bell className="w-5 h-5 text-white" />
+                <h3 className="text-white font-semibold text-sm sm:text-base">
+                  対応が必要です
+                </h3>
+                <Badge className="bg-white/20 text-white ml-auto">
+                  {alerts.pendingOffersForMyRequests.length}件
+                </Badge>
+              </div>
+              <div className="p-4 sm:p-6 space-y-3">
+                {alerts.pendingOffersForMyRequests.map((offer, i) => {
+                  const itemId = offer.offerId || offer.responseId || 0;
+                  const isConfirming = confirmingId === itemId;
+                  return (
+                    <div
+                      key={`${offer.helpRequestId}-${offer.type}-${itemId}-${i}`}
+                      className="p-4 rounded-xl border border-[#E5E5EA] bg-white space-y-3"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-semibold text-sm text-[#1D1D1F]">
+                              {offer.staffName}さん
+                            </span>
+                            {offer.staffStoreName && (
+                              <span className="text-xs text-[#86868B]">
+                                ({offer.staffStoreName})
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                            <span className="text-sm text-[#1D1D1F]">
+                              {formatAlertDate(offer.needDate)} {offer.offerStart}〜{offer.offerEnd}
+                            </span>
+                            {offer.isPartial && (
+                              <Badge className="bg-[#FF9500]/10 text-[#FF9500] text-[10px] px-1.5">
+                                部分対応
+                              </Badge>
+                            )}
+                          </div>
+                          {offer.message && (
+                            <p className="text-sm text-[#86868B] mt-1.5">
+                              {offer.message}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          disabled={isConfirming}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleQuickConfirm(
+                              offer.helpRequestId,
+                              offer.type,
+                              offer.offerId,
+                              offer.responseId,
+                              offer.staffName,
+                            );
+                          }}
+                          className="bg-[#34C759] hover:bg-[#30D158] text-white rounded-xl"
+                        >
+                          {isConfirming ? '処理中...' : '確定する'}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            router.push(`/dashboard/help-board/${offer.helpRequestId}`);
+                          }}
+                          className="border-[#E5E5EA] text-[#86868B] rounded-xl"
+                        >
+                          見送る
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </PageSection>
+          )}
+
+          {/* ====== エリア2: あなたのヘルプ求人（自店の要請） ====== */}
+          {isAdmin && myStoreHelpRequests.length > 0 && (
             <PageSection className="!p-0 overflow-hidden">
               <div className="bg-[#FF3B30] px-4 sm:px-6 py-3 flex items-center gap-2">
                 <AlertTriangle className="w-5 h-5 text-white" />
                 <h3 className="text-white font-semibold text-sm sm:text-base">
-                  ヘルプを求めている店舗があります
+                  あなたのヘルプ求人
                 </h3>
                 <Badge className="bg-white/20 text-white ml-auto">
-                  {otherStoreHelpRequests.length}件
+                  {myStoreHelpRequests.length}件
                 </Badge>
               </div>
               <div className="p-4 sm:p-6 space-y-3">
-                {otherStoreHelpRequests.slice(0, 3).map((req) => (
+                {myStoreHelpRequests.map((req) => {
+                  const offerCount = offerCountByRequest.get(req.id) || 0;
+                  const hasOffers = offerCount > 0;
+                  return (
+                    <div
+                      key={req.id}
+                      className="flex items-center justify-between gap-3 p-3 rounded-xl border border-[#E5E5EA] bg-white"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1 flex-wrap">
+                          <span className="text-sm font-medium text-[#1D1D1F]">
+                            {formatAlertDate(req.needDate)} {req.needStart}〜{req.needEnd}
+                          </span>
+                          {hasOffers ? (
+                            <Badge className="bg-[#FF9500]/10 text-[#FF9500] text-[10px]">
+                              応募あり
+                            </Badge>
+                          ) : (
+                            <Badge className="bg-[#FF3B30]/10 text-[#FF3B30] text-[10px]">
+                              未対応
+                            </Badge>
+                          )}
+                          {offerCount > 0 && (
+                            <span className="text-xs text-[#86868B]">応募{offerCount}名</span>
+                          )}
+                        </div>
+                        {req.memo && (
+                          <p className="text-xs text-[#86868B]">{req.memo}</p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {!hasOffers && !req.staffNotified && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleNotify(req.id);
+                            }}
+                            className="border-[#007AFF] text-[#007AFF] rounded-xl text-xs"
+                          >
+                            <Megaphone className="w-3.5 h-3.5 mr-1" />
+                            スタッフに通知
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => router.push(`/dashboard/help-board/${req.id}`)}
+                          className="border-[#E5E5EA] text-[#86868B] rounded-xl text-xs"
+                        >
+                          詳細を見る
+                          <ArrowRight className="w-3.5 h-3.5 ml-1" />
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </PageSection>
+          )}
+
+          {/* ====== エリア3: 他店のヘルプ状況 ====== */}
+          {isAdmin && otherStoreHelpRequests.length > 0 && (
+            <PageSection className="!p-0 overflow-hidden">
+              <div className="bg-[#F5F5F7] px-4 sm:px-6 py-3 flex items-center gap-2">
+                <MapPin className="w-5 h-5 text-[#86868B]" />
+                <h3 className="text-[#1D1D1F] font-semibold text-sm sm:text-base">
+                  他店のヘルプ状況
+                </h3>
+                <Badge className="bg-[#E5E5EA] text-[#86868B] ml-auto">
+                  {otherStoreHelpRequests.length}件
+                </Badge>
+              </div>
+              <div className="p-4 sm:p-6 space-y-2">
+                {otherStoreHelpRequests.slice(0, 5).map((req) => (
                   <div
                     key={req.id}
                     onClick={() => router.push(`/dashboard/help-board/${req.id}`)}
-                    className="flex items-center justify-between gap-3 p-3 rounded-xl border border-[#E5E5EA] hover:border-[#FF3B30]/30 hover:bg-[#FF3B30]/5 cursor-pointer transition-all"
+                    className="flex items-center justify-between gap-3 p-3 rounded-xl border border-[#E5E5EA] hover:border-[#007AFF]/30 hover:bg-[#F5F5F7] cursor-pointer transition-all"
                   >
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <MapPin className="w-4 h-4 text-[#FF3B30] shrink-0" />
-                        <span className="font-semibold text-sm text-[#1D1D1F]">{req.storeName}</span>
-                        {req.status === 'open' && (
-                          <Badge className="bg-[#FF3B30]/10 text-[#FF3B30] text-[10px]">緊急</Badge>
-                        )}
-                      </div>
-                      <p className="text-sm text-[#86868B] ml-6">
+                    <div className="flex items-center gap-2 flex-1 min-w-0 flex-wrap">
+                      <span className="font-medium text-sm text-[#1D1D1F]">{req.storeName}</span>
+                      <span className="text-sm text-[#86868B]">
                         {formatAlertDate(req.needDate)} {req.needStart}〜{req.needEnd}
-                        {req.memo && ` / ${req.memo}`}
-                      </p>
+                      </span>
+                      {req.status === 'open' ? (
+                        <Badge className="bg-[#FF3B30]/10 text-[#FF3B30] text-[10px]">未対応</Badge>
+                      ) : (
+                        <Badge className="bg-[#FF9500]/10 text-[#FF9500] text-[10px]">応募あり</Badge>
+                      )}
                     </div>
                     <ArrowRight className="w-4 h-4 text-[#86868B] shrink-0" />
                   </div>
                 ))}
-                {otherStoreHelpRequests.length > 3 && (
+                {otherStoreHelpRequests.length > 5 && (
                   <Button
                     variant="outline"
                     size="sm"
@@ -503,83 +716,43 @@ export function DashboardContent({ user }: DashboardContentProps) {
             </PageSection>
           )}
 
-          {/* ====== 確認待ちのオファー・応募（自店の要請への回答） ====== */}
-          {isAdmin && (alerts.pendingOffersForMyRequests?.length || 0) > 0 && (
+          {/* ====== スタッフ向け：ヘルプ求人のお知らせ ====== */}
+          {isStaff && alerts.openHelpRequests.length > 0 && (
             <PageSection className="!p-0 overflow-hidden">
-              <div className="bg-[#FF9500] px-4 sm:px-6 py-3 flex items-center gap-2">
-                <Bell className="w-5 h-5 text-white" />
-                <h3 className="text-white font-semibold text-sm sm:text-base">
-                  確認待ちのオファーがあります
-                </h3>
-                <Badge className="bg-white/20 text-white ml-auto">
-                  {alerts.pendingOffersForMyRequests.length}件
-                </Badge>
-              </div>
-              <div className="p-4 sm:p-6 space-y-3">
-                {alerts.pendingOffersForMyRequests.map((offer, i) => (
-                  <div
-                    key={`${offer.helpRequestId}-${offer.staffName}-${i}`}
-                    onClick={() => router.push(`/dashboard/help-board/${offer.helpRequestId}`)}
-                    className="flex items-center justify-between gap-3 p-3 rounded-xl border border-[#E5E5EA] hover:border-[#FF9500]/30 hover:bg-[#FF9500]/5 cursor-pointer transition-all"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        {offer.type === 'store_offer' ? (
-                          <MapPin className="w-4 h-4 text-[#FF9500] shrink-0" />
-                        ) : (
-                          <Hand className="w-4 h-4 text-[#FF9500] shrink-0" />
-                        )}
-                        <span className="font-semibold text-sm text-[#1D1D1F]">
-                          {offer.type === 'store_offer'
-                            ? `${offer.storeName}から ${offer.staffName}さん`
-                            : `${offer.staffName}さんが応募`
-                          }
-                        </span>
-                      </div>
-                      <p className="text-sm text-[#86868B] ml-6">
-                        {formatAlertDate(offer.needDate)} {offer.offerStart}〜{offer.offerEnd}
-                      </p>
-                    </div>
-                    <Button size="sm" className="bg-[#FF9500] hover:bg-[#E68600] text-white rounded-xl shrink-0">
-                      確認する
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            </PageSection>
-          )}
-
-
-
-          {/* ====== スタッフ向け：ヘルプ募集通知 ====== */}
-          {isStaff && (alerts.staffHelpNotifications?.length || 0) > 0 && (
-            <PageSection className="!p-0 overflow-hidden">
-              <div className="bg-[#007AFF] px-4 sm:px-6 py-3 flex items-center gap-2">
+              <div className="bg-[#FF3B30] px-4 sm:px-6 py-3 flex items-center gap-2">
                 <Megaphone className="w-5 h-5 text-white" />
                 <h3 className="text-white font-semibold text-sm sm:text-base">
-                  ヘルプスタッフ募集中
+                  ヘルプ求人が届いています
                 </h3>
                 <Badge className="bg-white/20 text-white ml-auto">
-                  {alerts.staffHelpNotifications.length}件
+                  {alerts.openHelpRequests.length}件
                 </Badge>
               </div>
+              <div className="px-4 sm:px-6 pt-3 pb-1">
+                <p className="text-sm text-[#86868B]">
+                  以下の店舗からヘルプが来ています。スケジュールに余裕のある方は「応募する」ボタンを押してください。店長に連絡が届きます。
+                </p>
+              </div>
               <div className="p-4 sm:p-6 space-y-3">
-                {alerts.staffHelpNotifications.map((notif, i) => (
+                {alerts.openHelpRequests.map((req) => (
                   <div
-                    key={`staff-notif-${notif.helpRequestId}-${i}`}
-                    onClick={() => router.push(`/dashboard/help-board/${notif.helpRequestId}`)}
-                    className="flex items-center justify-between gap-3 p-3 rounded-xl border border-[#E5E5EA] hover:border-[#007AFF]/30 hover:bg-[#007AFF]/5 cursor-pointer transition-all"
+                    key={`staff-help-${req.id}`}
+                    onClick={() => router.push(`/dashboard/help-board/${req.id}`)}
+                    className="flex items-center justify-between gap-3 p-4 rounded-xl border border-[#E5E5EA] hover:border-[#FF3B30]/30 hover:bg-[#FF3B30]/5 cursor-pointer transition-all"
                   >
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1">
-                        <MapPin className="w-4 h-4 text-[#007AFF] shrink-0" />
-                        <span className="font-semibold text-sm text-[#1D1D1F]">{notif.storeName}</span>
+                        <MapPin className="w-4 h-4 text-[#FF3B30] shrink-0" />
+                        <span className="font-semibold text-sm text-[#1D1D1F]">{req.storeName}</span>
                       </div>
-                      <p className="text-sm text-[#86868B] ml-6">
-                        {formatAlertDate(notif.needDate)} {notif.needStart}〜{notif.needEnd}
+                      <p className="text-sm text-[#1D1D1F] ml-6">
+                        {formatAlertDate(req.needDate)} {req.needStart}〜{req.needEnd}
                       </p>
+                      {req.memo && (
+                        <p className="text-xs text-[#86868B] ml-6 mt-1">{req.memo}</p>
+                      )}
                     </div>
-                    <Button size="sm" className="bg-[#007AFF] hover:bg-[#0056b3] text-white rounded-xl shrink-0">
+                    <Button size="sm" className="bg-[#FF3B30] hover:bg-[#E0352B] text-white rounded-xl shrink-0">
                       応募する
                     </Button>
                   </div>

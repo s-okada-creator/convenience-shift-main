@@ -27,6 +27,7 @@ export const staff = pgTable('staff', {
   joinedAt: date('joined_at').notNull(),
   skillLevel: integer('skill_level').default(1),
   notes: text('notes'),
+  lineUserId: text('line_user_id'),
   role: roleEnum('role').default('staff').notNull(),
   canWorkOtherStores: boolean('can_work_other_stores').default(false).notNull(),
   skills: text('skills'),
@@ -158,6 +159,43 @@ export const proactiveOffers = pgTable('proactive_offers', {
   index('proactive_offers_status_idx').on(table.status),
 ]);
 
+// シフト求人ステータス
+export const shiftPostingStatusEnum = pgEnum('shift_posting_status', ['open', 'filled', 'closed', 'expired']);
+export const shiftApplicationStatusEnum = pgEnum('shift_application_status', ['pending', 'confirmed', 'rejected', 'cancelled']);
+
+// シフト求人テーブル
+export const shiftPostings = pgTable('shift_postings', {
+  id: serial('id').primaryKey(),
+  storeId: integer('store_id').references(() => stores.id).notNull(),
+  postedBy: integer('posted_by').references(() => staff.id).notNull(),
+  date: date('date').notNull(),
+  startTime: time('start_time').notNull(),
+  endTime: time('end_time').notNull(),
+  slots: integer('slots').default(1).notNull(), // 募集人数
+  filledCount: integer('filled_count').default(0).notNull(), // 確定済み人数
+  description: text('description'), // 「レジできる方」等
+  status: shiftPostingStatusEnum('status').default('open').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (table) => [
+  index('shift_postings_store_idx').on(table.storeId),
+  index('shift_postings_date_idx').on(table.date),
+  index('shift_postings_status_idx').on(table.status),
+]);
+
+// シフト求人応募テーブル
+export const shiftApplications = pgTable('shift_applications', {
+  id: serial('id').primaryKey(),
+  postingId: integer('posting_id').references(() => shiftPostings.id, { onDelete: 'cascade' }).notNull(),
+  staffId: integer('staff_id').references(() => staff.id).notNull(),
+  message: text('message'), // 任意メッセージ
+  status: shiftApplicationStatusEnum('status').default('pending').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => [
+  index('shift_applications_posting_idx').on(table.postingId),
+  index('shift_applications_staff_idx').on(table.staffId),
+]);
+
 // 通知ログテーブル
 export const notifications = pgTable('notifications', {
   id: serial('id').primaryKey(),
@@ -204,3 +242,8 @@ export type NewProactiveOffer = typeof proactiveOffers.$inferInsert;
 
 export type Notification = typeof notifications.$inferSelect;
 export type NewNotification = typeof notifications.$inferInsert;
+
+export type ShiftPosting = typeof shiftPostings.$inferSelect;
+export type NewShiftPosting = typeof shiftPostings.$inferInsert;
+export type ShiftApplication = typeof shiftApplications.$inferSelect;
+export type NewShiftApplication = typeof shiftApplications.$inferInsert;

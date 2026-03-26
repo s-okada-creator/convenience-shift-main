@@ -4,31 +4,10 @@ import { helpRequests, staff, stores, shifts, timeOffRequests, availabilityPatte
 import { eq, and, ne, or } from 'drizzle-orm';
 import { requireAdmin } from '@/lib/auth';
 import { handleApiError, ApiErrors } from '@/lib/api-error';
+import { sendStoreDiscordNotification, formatDateForDiscord } from '@/lib/discord';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
-}
-
-// Discord通知送信ヘルパー
-async function sendDiscordNotification(message: string): Promise<void> {
-  const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
-  if (!webhookUrl) {
-    console.error('DISCORD_WEBHOOK_URL is not set');
-    return;
-  }
-
-  try {
-    const response = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: message }),
-    });
-    if (!response.ok) {
-      console.error('Discord webhook error:', await response.text());
-    }
-  } catch (error) {
-    console.error('Discord notification failed:', error);
-  }
 }
 
 // スタッフ直接通知（条件に合うスタッフを抽出してDiscord + アプリ内通知）
@@ -161,28 +140,32 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       .set({ staffNotified: true, updatedAt: new Date() })
       .where(eq(helpRequests.id, requestId));
 
-    // Discord通知送信
-    const [year, month, day] = helpRequest.needDate.split('-');
-    const dateObj = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
-    const weekdays = ['日', '月', '火', '水', '木', '金', '土'];
-    const formattedDate = `${parseInt(month)}/${parseInt(day)}（${weekdays[dateObj.getDay()]}）`;
+    // Discord通知送信（各店舗チャンネルへ）
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://convenience-shift-main.vercel.app';
+    const formattedDate = formatDateForDiscord(helpRequest.needDate);
     const timeRange = `${helpRequest.needStart.slice(0, 5)}〜${helpRequest.needEnd.slice(0, 5)}`;
 
-    const staffNames = notifiedStaff.map(s => s.name).join('、');
+    // 対象スタッフの所属店舗IDを重複なく取得
+    const targetStoreIds = [...new Set(notifiedStaff.map(s => s.storeId))];
 
-    const discordMessage = [
-      `📢【スタッフ募集】${store?.name || ''}がヘルプを求めています！`,
-      ``,
-      `📅 ${formattedDate} ${timeRange}`,
-      helpRequest.memo ? `📝 ${helpRequest.memo}` : null,
-      ``,
-      `💪 対象スタッフ: ${staffNames}（${notifiedStaff.length}名）`,
-      ``,
-      `✅ 対応できる方はアプリのヘルプボードから応募してください！`,
-      `🔗 部分時間（例: 一部の時間帯だけ）でもOKです！`,
-    ].filter(Boolean).join('\n');
+    for (const storeId of targetStoreIds) {
+      const storeStaff = notifiedStaff.filter(s => s.storeId === storeId);
+      const staffNames = storeStaff.map(s => s.name).join('、');
 
-    await sendDiscordNotification(discordMessage);
+      const storeMessage = [
+        `📢【ヘルプ募集】${store?.name || ''}が人手を求めています！`,
+        ``,
+        `📅 ${formattedDate} ${timeRange}`,
+        helpRequest.memo ? `📝 ${helpRequest.memo}` : null,
+        ``,
+        `💪 対象: ${staffNames}さん`,
+        ``,
+        `✅ 行ける方はこちらから応募してください👇`,
+        `🔗 ${appUrl}/dashboard/help-board/${requestId}`,
+      ].filter(Boolean).join('\n');
+
+      await sendStoreDiscordNotification(storeId, storeMessage);
+    }
 
     return NextResponse.json({
       success: true,
