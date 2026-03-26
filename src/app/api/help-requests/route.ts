@@ -4,7 +4,7 @@ import { helpRequests, stores, staff, notifications } from '@/lib/db/schema';
 import { eq, and, gte, lte, or } from 'drizzle-orm';
 import { requireAdmin, getSession, canAccessStore } from '@/lib/auth';
 import { handleApiError, ApiErrors } from '@/lib/api-error';
-import { formatDateForLine, notifyAllManagers } from '@/lib/line';
+import { formatDateForLine, notifyAllManagers, APP_URL } from '@/lib/line';
 
 const normalizeTime = <T extends { needStart: string; needEnd: string }>(row: T) => ({
   ...row,
@@ -164,10 +164,17 @@ export async function POST(request: NextRequest) {
     try {
       const formattedDate = formatDateForLine(needDate);
       const lineMessage = [
-        `🔴【緊急ヘルプ】${store.name}`,
-        `${formattedDate} ${needStart.slice(0, 5)}〜${needEnd.slice(0, 5)}`,
-        `人員要請が届きました`,
-        memo ? `メモ: ${memo}` : null,
+        `🚨🚨🚨 緊急ヘルプ要請 🚨🚨🚨`,
+        ``,
+        `📍 ${store.name}`,
+        `📅 ${formattedDate} ${needStart.slice(0, 5)}〜${needEnd.slice(0, 5)}`,
+        `👤 要請者: ${session.name}さん`,
+        memo ? `📝 ${memo}` : null,
+        ``,
+        `⚠️ @全店長 まだ応募はありません`,
+        ``,
+        `👇 確認して対応をお願いします`,
+        `🔗 ${APP_URL}/dashboard/help-board/${newRequest.id}`,
       ].filter(Boolean).join('\n');
       await notifyAllManagers(lineMessage);
     } catch (lineError) {

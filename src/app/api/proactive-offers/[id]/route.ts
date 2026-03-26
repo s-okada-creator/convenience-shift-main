@@ -4,7 +4,7 @@ import { proactiveOffers, stores, staff, shifts, notifications } from '@/lib/db/
 import { eq, or } from 'drizzle-orm';
 import { getSession, canAccessStore } from '@/lib/auth';
 import { handleApiError, ApiErrors } from '@/lib/api-error';
-import { formatDateForLine, notifyAllManagers, notifyStaff } from '@/lib/line';
+import { formatDateForLine, notifyAllManagers, notifyStaff, APP_URL } from '@/lib/line';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -193,12 +193,30 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
         await db.insert(notifications).values(notificationRecords);
       }
 
-      // LINE通知
+      // LINE通知（全店長向け）
       const formattedDate = formatDateForLine(existing.availableDate);
-      const lineMessage = `🟢【勤務確定】${staffInfo?.name || ''}さんが${acceptingStore?.name || ''}で ${formattedDate} ${existing.availableStart.slice(0, 5)}〜${existing.availableEnd.slice(0, 5)} 勤務確定`;
-      await notifyAllManagers(lineMessage);
+      const managerMessage = [
+        `✅ 追加勤務が確定しました！`,
+        ``,
+        `👤 @${staffInfo?.name || ''}さん → ${acceptingStore?.name || ''}`,
+        `📅 ${formattedDate} ${existing.availableStart.slice(0, 5)}〜${existing.availableEnd.slice(0, 5)}`,
+        `📋 シフト自動登録済み`,
+        ``,
+        `🔗 ${APP_URL}/dashboard/extra-shifts`,
+      ].join('\n');
+      await notifyAllManagers(managerMessage);
       // スタッフ本人にも通知
-      await notifyStaff(existing.staffId, `✅ ${acceptingStore?.name || ''}での勤務が確定しました\n${formattedDate} ${existing.availableStart.slice(0, 5)}〜${existing.availableEnd.slice(0, 5)}`);
+      const staffMessage = [
+        `✅ 追加勤務が確定しました！`,
+        ``,
+        `📍 勤務先: ${acceptingStore?.name || ''}`,
+        `📅 ${formattedDate} ${existing.availableStart.slice(0, 5)}〜${existing.availableEnd.slice(0, 5)}`,
+        `📋 シフトは自動で登録されています`,
+        ``,
+        `👇 自分のシフトを確認`,
+        `🔗 ${APP_URL}/dashboard/my-shifts`,
+      ].join('\n');
+      await notifyStaff(existing.staffId, staffMessage);
 
       return NextResponse.json(normalizeTime(updated));
     }

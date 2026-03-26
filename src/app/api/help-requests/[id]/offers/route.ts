@@ -4,7 +4,7 @@ import { helpRequests, helpOffers, stores, staff } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { requireAdmin, canAccessStore } from '@/lib/auth';
 import { handleApiError, ApiErrors } from '@/lib/api-error';
-import { formatDateForLine, notifyStoreManagers } from '@/lib/line';
+import { formatDateForLine, notifyStoreManagers, APP_URL } from '@/lib/line';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -121,7 +121,17 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const [offeringStore] = await db.select().from(stores).where(eq(stores.id, offeringStoreId));
     const [requestingStore] = await db.select().from(stores).where(eq(stores.id, helpRequest.storeId));
     const formattedDate = formatDateForLine(helpRequest.needDate);
-    const lineMessage = `🟡【申し出】${offeringStore?.name || ''}の${staffMember.name}さんが ${requestingStore?.name || ''}の ${formattedDate} ${offerStart.slice(0, 5)}〜${offerEnd.slice(0, 5)} に対応可能です\n\n👉 アプリで確認・確定してください`;
+    const lineMessage = [
+      `🤝 他店からスタッフの申し出があります`,
+      ``,
+      `📍 ${requestingStore?.name || ''}のヘルプ要請`,
+      `📅 ${formattedDate} ${offerStart.slice(0, 5)}〜${offerEnd.slice(0, 5)}`,
+      `👤 @${staffMember.name}さん（${offeringStore?.name || ''}）が対応可能`,
+      isPartial ? `⚠️ 部分対応` : `✅ フル対応`,
+      ``,
+      `👇 確認して確定してください`,
+      `🔗 ${APP_URL}/dashboard/help-board/${requestId}`,
+    ].filter(Boolean).join('\n');
     await notifyStoreManagers(helpRequest.storeId, lineMessage);
 
     return NextResponse.json({

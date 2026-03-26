@@ -3,6 +3,8 @@ import { db } from '@/lib/db';
 import { staff } from '@/lib/db/schema';
 import { eq, and, inArray } from 'drizzle-orm';
 
+export const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://convenience-shift-main.vercel.app';
+
 export function formatDateForLine(dateStr: string): string {
   const [year, month, day] = dateStr.split('-');
   const dateObj = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));

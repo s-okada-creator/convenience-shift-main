@@ -4,7 +4,7 @@ import { helpRequests, staff, stores, shifts, timeOffRequests, availabilityPatte
 import { eq, and, ne, or } from 'drizzle-orm';
 import { requireAdmin } from '@/lib/auth';
 import { handleApiError, ApiErrors } from '@/lib/api-error';
-import { formatDateForLine, notifyStaffMultiple } from '@/lib/line';
+import { formatDateForLine, notifyStaffMultiple, APP_URL } from '@/lib/line';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -141,18 +141,20 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       .where(eq(helpRequests.id, requestId));
 
     // LINE通知送信（対象スタッフへ直接）
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://convenience-shift-main.vercel.app';
     const formattedDate = formatDateForLine(helpRequest.needDate);
     const timeRange = `${helpRequest.needStart.slice(0, 5)}〜${helpRequest.needEnd.slice(0, 5)}`;
 
     const lineMessage = [
-      `📢【ヘルプ募集】${store?.name || ''}が人手を求めています！`,
+      `🚨🚨🚨 ヘルプ募集中！🚨🚨🚨`,
       ``,
+      `📍 ${store?.name || ''}が人手を求めています`,
       `📅 ${formattedDate} ${timeRange}`,
       helpRequest.memo ? `📝 ${helpRequest.memo}` : null,
       ``,
-      `✅ 行ける方はアプリから応募してください👇`,
-      `🔗 ${appUrl}/dashboard/help-board/${requestId}`,
+      `⚠️ @あなた宛の募集です！`,
+      ``,
+      `✅ 行ける方はこちらから応募👇`,
+      `🔗 ${APP_URL}/dashboard/help-board/${requestId}`,
     ].filter(Boolean).join('\n');
 
     const staffIds = notifiedStaff.map(s => s.id);

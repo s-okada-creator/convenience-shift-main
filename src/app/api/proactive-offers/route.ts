@@ -4,7 +4,7 @@ import { proactiveOffers, stores, staff, notifications } from '@/lib/db/schema';
 import { eq, and, gte, lte, or } from 'drizzle-orm';
 import { getSession, canAccessStore } from '@/lib/auth';
 import { handleApiError, ApiErrors } from '@/lib/api-error';
-import { formatDateForLine, notifyAllManagers } from '@/lib/line';
+import { formatDateForLine, notifyAllManagers, APP_URL } from '@/lib/line';
 
 const normalizeTime = <T extends { availableStart: string; availableEnd: string }>(row: T) => ({
   ...row,
@@ -192,7 +192,16 @@ export async function POST(request: NextRequest) {
 
     // LINE通知
     const formattedDate = formatDateForLine(availableDate);
-    const lineMessage = `🟢【追加勤務希望】${staffInfo.name}さん（${store.name}）が ${formattedDate} ${availableStart.slice(0, 5)}〜${availableEnd.slice(0, 5)} 勤務可能です${memo ? ' / ' + memo : ''}`;
+    const lineMessage = [
+      `💪 追加勤務の希望が届きました！`,
+      ``,
+      `👤 @${staffInfo.name}さん（${store.name}）`,
+      `📅 ${formattedDate} ${availableStart.slice(0, 5)}〜${availableEnd.slice(0, 5)}`,
+      memo ? `💬 「${memo}」` : null,
+      ``,
+      `👇 受け入れ可能な店舗はアプリから確定してください`,
+      `🔗 ${APP_URL}/dashboard/extra-shifts`,
+    ].filter(Boolean).join('\n');
     await notifyAllManagers(lineMessage);
 
     return NextResponse.json(normalizeTime(newOffer), { status: 201 });

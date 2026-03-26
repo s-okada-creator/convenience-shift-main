@@ -4,7 +4,7 @@ import { helpRequests, staffHelpResponses, staff, stores, notifications } from '
 import { eq, and, or } from 'drizzle-orm';
 import { requireAuth } from '@/lib/auth';
 import { handleApiError, ApiErrors } from '@/lib/api-error';
-import { formatDateForLine, notifyStoreManagers } from '@/lib/line';
+import { formatDateForLine, notifyStoreManagers, APP_URL } from '@/lib/line';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -118,7 +118,20 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     // LINE通知（失敗しても応募自体は成功とする）
     try {
       const formattedDate = formatDateForLine(helpRequest.needDate);
-      const lineMessage = `🟡【スタッフ応募】${staffMember?.name || session.name}さん（${staffStore?.name || ''}）が ${store?.name || ''}の ${formattedDate} ${offerStart}〜${offerEnd} に「出れます」と応募しました\n\n👉 アプリで確認・確定してください`;
+      const needStart = helpRequest.needStart.slice(0, 5);
+      const needEnd = helpRequest.needEnd.slice(0, 5);
+      const lineMessage = [
+        `🙋 スタッフ応募がありました！`,
+        ``,
+        `📍 ${store?.name || ''}のヘルプ要請`,
+        `📅 ${formattedDate} ${offerStart}〜${offerEnd}`,
+        `👤 応募者: @${staffMember?.name || session.name}さん（${staffStore?.name || ''}）`,
+        isPartial ? `⚠️ 部分対応（要請: ${needStart}〜${needEnd}）` : `✅ フル対応`,
+        message ? `💬 「${message}」` : null,
+        ``,
+        `👇 確認して確定してください`,
+        `🔗 ${APP_URL}/dashboard/help-board/${requestId}`,
+      ].filter(Boolean).join('\n');
       await notifyStoreManagers(helpRequest.storeId, lineMessage);
     } catch (lineError) {
       console.error('LINE通知エラー（応募自体は成功）:', lineError);

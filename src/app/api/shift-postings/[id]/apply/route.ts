@@ -4,7 +4,7 @@ import { shiftPostings, shiftApplications, stores, staff } from '@/lib/db/schema
 import { eq, and } from 'drizzle-orm';
 import { requireAuth } from '@/lib/auth';
 import { handleApiError, ApiErrors } from '@/lib/api-error';
-import { formatDateForLine, notifyStoreManagers } from '@/lib/line';
+import { formatDateForLine, notifyStoreManagers, APP_URL } from '@/lib/line';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -70,7 +70,19 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       const [store] = await db.select().from(stores).where(eq(stores.id, posting.storeId));
       const [applicant] = await db.select().from(staff).where(eq(staff.id, session.id));
       const formattedDate = formatDateForLine(posting.date);
-      const lineMessage = `🟡【求人応募】${applicant?.name || session.name}さんが ${store?.name || ''}の ${formattedDate} ${posting.startTime.slice(0, 5)}〜${posting.endTime.slice(0, 5)} に応募しました\n\n👉 アプリで確認・確定してください`;
+      const lineMessage = [
+        `🙋 シフト求人に応募がありました！`,
+        ``,
+        `📍 ${store?.name || ''}`,
+        `📅 ${formattedDate} ${posting.startTime.slice(0, 5)}〜${posting.endTime.slice(0, 5)}`,
+        `👤 応募者: @${applicant?.name || session.name}さん`,
+        message ? `💬 「${message}」` : null,
+        ``,
+        `📊 募集: ${posting.slots}人 / 確定: ${posting.filledCount}人 / 応募: ${applicationCount.length}件`,
+        ``,
+        `👇 確認して確定してください`,
+        `🔗 ${APP_URL}/dashboard/shift-board/${postingId}`,
+      ].filter(Boolean).join('\n');
       await notifyStoreManagers(posting.storeId, lineMessage);
     } catch (lineError) {
       console.error('LINE通知エラー（応募自体は成功）:', lineError);

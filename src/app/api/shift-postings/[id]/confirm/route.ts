@@ -4,7 +4,7 @@ import { shiftPostings, shiftApplications, shifts, stores, staff } from '@/lib/d
 import { eq, and } from 'drizzle-orm';
 import { requireAdmin, canAccessStore } from '@/lib/auth';
 import { handleApiError, ApiErrors } from '@/lib/api-error';
-import { formatDateForLine, notifyStoreManagers, notifyStaff } from '@/lib/line';
+import { formatDateForLine, notifyStoreManagers, notifyStaff, APP_URL } from '@/lib/line';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -97,10 +97,30 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       const [store] = await db.select().from(stores).where(eq(stores.id, posting.storeId));
       const [confirmedStaff] = await db.select().from(staff).where(eq(staff.id, application.staffId));
       const formattedDate = formatDateForLine(posting.date);
-      const lineMessage = `🟢【求人確定】${store?.name || ''}の ${formattedDate} ${posting.startTime.slice(0, 5)}〜${posting.endTime.slice(0, 5)} に ${confirmedStaff?.name || ''}さんが確定しました\n\nシフトが自動登録されました`;
-      await notifyStoreManagers(posting.storeId, lineMessage);
+      const managerMessage = [
+        `✅ シフト求人が確定しました！`,
+        ``,
+        `📍 ${store?.name || ''}`,
+        `📅 ${formattedDate} ${posting.startTime.slice(0, 5)}〜${posting.endTime.slice(0, 5)}`,
+        `👤 @${confirmedStaff?.name || ''}さんが確定`,
+        `📊 ${newFilledCount}/${posting.slots}人 確定済み`,
+        `📋 シフト自動登録済み`,
+        ``,
+        `🔗 ${APP_URL}/dashboard/shift-board/${postingId}`,
+      ].join('\n');
+      await notifyStoreManagers(posting.storeId, managerMessage);
       // 確定されたスタッフ本人にも通知
-      await notifyStaff(application.staffId, `✅ ${store?.name || ''}のシフトに確定しました\n${formattedDate} ${posting.startTime.slice(0, 5)}〜${posting.endTime.slice(0, 5)}\nシフトが自動登録されました`);
+      const staffMessage = [
+        `✅ シフトが確定しました！`,
+        ``,
+        `📍 勤務先: ${store?.name || ''}`,
+        `📅 ${formattedDate} ${posting.startTime.slice(0, 5)}〜${posting.endTime.slice(0, 5)}`,
+        `📋 シフトは自動で登録されています`,
+        ``,
+        `👇 自分のシフトを確認`,
+        `🔗 ${APP_URL}/dashboard/my-shifts`,
+      ].join('\n');
+      await notifyStaff(application.staffId, staffMessage);
     } catch (lineError) {
       console.error('LINE通知エラー（確定自体は成功）:', lineError);
     }

@@ -178,7 +178,14 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
 
       // LINE通知
       const formattedDate = formatDateForLine(existing.needDate);
-      const lineMessage = `⚪【取り下げ】${store?.name || ''}の ${formattedDate} ${existing.needStart.slice(0, 5)}〜${existing.needEnd.slice(0, 5)} のヘルプ要請が取り下げられました`;
+      const lineMessage = [
+        `⚪ ヘルプ要請が取り下げられました`,
+        ``,
+        `📍 ${store?.name || ''}`,
+        `📅 ${formattedDate} ${existing.needStart.slice(0, 5)}〜${existing.needEnd.slice(0, 5)}`,
+        ``,
+        `対応は不要になりました。`,
+      ].join('\n');
       await notifyAllManagers(lineMessage);
     }
 

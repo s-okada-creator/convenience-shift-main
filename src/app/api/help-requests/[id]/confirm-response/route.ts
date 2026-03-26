@@ -4,7 +4,7 @@ import { helpRequests, staffHelpResponses, shifts, stores, staff, notifications 
 import { eq, and, ne, or } from 'drizzle-orm';
 import { requireAdmin, canAccessStore } from '@/lib/auth';
 import { handleApiError, ApiErrors } from '@/lib/api-error';
-import { formatDateForLine, notifyAllManagers, notifyStaff } from '@/lib/line';
+import { formatDateForLine, notifyAllManagers, notifyStaff, APP_URL } from '@/lib/line';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -133,12 +133,31 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       await db.insert(notifications).values(notificationRecords);
     }
 
-    // LINE通知
+    // LINE通知（全店長向け）
     const formattedDate = formatDateForLine(helpRequest.needDate);
-    const lineMessage = `🟢【確定】${requestStore?.name || ''}の ${formattedDate} ${staffResponse.offerStart.slice(0, 5)}〜${staffResponse.offerEnd.slice(0, 5)} のヘルプが確定しました（${responseStaff?.name || ''}さん応募）\n\nシフトが自動登録されました`;
-    await notifyAllManagers(lineMessage);
+    const managerMessage = [
+      `✅ スタッフ応募が確定しました！`,
+      ``,
+      `📍 ${requestStore?.name || ''}`,
+      `📅 ${formattedDate} ${staffResponse.offerStart.slice(0, 5)}〜${staffResponse.offerEnd.slice(0, 5)}`,
+      `👤 @${responseStaff?.name || ''}さん（${staffStore?.name || ''}）の応募を確定`,
+      `📋 シフト自動登録済み`,
+      ``,
+      `🔗 ${APP_URL}/dashboard/help-board/${requestId}`,
+    ].join('\n');
+    await notifyAllManagers(managerMessage);
     // 確定されたスタッフ本人にも通知
-    await notifyStaff(staffResponse.staffId, `✅ ${requestStore?.name || ''}のヘルプに確定しました\n${formattedDate} ${staffResponse.offerStart.slice(0, 5)}〜${staffResponse.offerEnd.slice(0, 5)}\nシフトが自動登録されました`);
+    const staffMessage = [
+      `✅ ヘルプ勤務が確定しました！`,
+      ``,
+      `📍 勤務先: ${requestStore?.name || ''}`,
+      `📅 ${formattedDate} ${staffResponse.offerStart.slice(0, 5)}〜${staffResponse.offerEnd.slice(0, 5)}`,
+      `📋 シフトは自動で登録されています`,
+      ``,
+      `👇 自分のシフトを確認`,
+      `🔗 ${APP_URL}/dashboard/my-shifts`,
+    ].join('\n');
+    await notifyStaff(staffResponse.staffId, staffMessage);
 
     return NextResponse.json({
       success: true,

@@ -4,7 +4,7 @@ import { helpRequests, helpOffers, shifts, stores, staff, notifications } from '
 import { eq, and, ne, or } from 'drizzle-orm';
 import { requireAdmin, canAccessStore } from '@/lib/auth';
 import { handleApiError, ApiErrors } from '@/lib/api-error';
-import { formatDateForLine, notifyAllManagers, notifyStaff } from '@/lib/line';
+import { formatDateForLine, notifyAllManagers, notifyStaff, APP_URL } from '@/lib/line';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -121,12 +121,31 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       await db.insert(notifications).values(notificationRecords);
     }
 
-    // LINE通知
+    // LINE通知（全店長向け）
     const formattedDate = formatDateForLine(helpRequest.needDate);
-    const lineMessage = `🟢【確定】${requestStore?.name || ''}の ${formattedDate} ${offer.offerStart.slice(0, 5)}〜${offer.offerEnd.slice(0, 5)} のヘルプが確定しました（${offerStaff?.name || ''}さん / ${offerStore?.name || ''}）\n\nシフトが自動登録されました`;
-    await notifyAllManagers(lineMessage);
+    const managerMessage = [
+      `✅ ヘルプ確定しました！`,
+      ``,
+      `📍 ${requestStore?.name || ''}`,
+      `📅 ${formattedDate} ${offer.offerStart.slice(0, 5)}〜${offer.offerEnd.slice(0, 5)}`,
+      `👤 @${offerStaff?.name || ''}さん（${offerStore?.name || ''}）`,
+      `📋 シフト自動登録済み`,
+      ``,
+      `🔗 ${APP_URL}/dashboard/help-board/${requestId}`,
+    ].join('\n');
+    await notifyAllManagers(managerMessage);
     // 確定されたスタッフ本人にも通知
-    await notifyStaff(offer.staffId, `✅ ${requestStore?.name || ''}のヘルプに確定しました\n${formattedDate} ${offer.offerStart.slice(0, 5)}〜${offer.offerEnd.slice(0, 5)}\nシフトが自動登録されました`);
+    const staffMessage = [
+      `✅ ヘルプ勤務が確定しました！`,
+      ``,
+      `📍 勤務先: ${requestStore?.name || ''}`,
+      `📅 ${formattedDate} ${offer.offerStart.slice(0, 5)}〜${offer.offerEnd.slice(0, 5)}`,
+      `📋 シフトは自動で登録されています`,
+      ``,
+      `👇 自分のシフトを確認`,
+      `🔗 ${APP_URL}/dashboard/my-shifts`,
+    ].join('\n');
+    await notifyStaff(offer.staffId, staffMessage);
 
     return NextResponse.json({
       success: true,
