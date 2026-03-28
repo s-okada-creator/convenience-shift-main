@@ -147,6 +147,14 @@ const HelpRequestCard = memo(function HelpRequestCard({
                 <span className="line-clamp-1">{request.memo}</span>
               </div>
             )}
+            {(() => {
+              const today = new Date();
+              today.setHours(0, 0, 0, 0);
+              const needDate = new Date(request.needDate + 'T00:00:00');
+              return needDate < today ? (
+                <p className="text-[10px] text-[#FF9500]">※ 期日経過 - 2日後に自動削除</p>
+              ) : null;
+            })()}
           </div>
         </div>
 

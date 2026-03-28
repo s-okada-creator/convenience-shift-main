@@ -639,6 +639,16 @@ export function HelpDetailContent({ user, helpRequestId }: HelpDetailContentProp
                 <p className="text-xs text-[#86868B] mt-4">
                   投稿: {getRelativeTime(request.createdAt)}
                 </p>
+                {(() => {
+                  const today = new Date();
+                  today.setHours(0, 0, 0, 0);
+                  const needDate = new Date(request.needDate + 'T00:00:00');
+                  return needDate < today ? (
+                    <p className="text-[10px] text-[#FF9500] mt-1">
+                      ※ この要請は期日を過ぎています。2日後に自動削除されます。
+                    </p>
+                  ) : null;
+                })()}
               </div>
 
               {/* アクションボタン（管理者のみ） */}
