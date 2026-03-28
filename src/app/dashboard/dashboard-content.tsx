@@ -716,44 +716,42 @@ export function DashboardContent({ user }: DashboardContentProps) {
             </PageSection>
           )}
 
-          {/* ====== スタッフ向け：ヘルプ求人のお知らせ ====== */}
+          {/* ====== スタッフ向け：ヘルプ募集のお知らせ ====== */}
           {isStaff && alerts.openHelpRequests.length > 0 && (
-            <PageSection className="!p-0 overflow-hidden">
-              <div className="bg-[#FF3B30] px-4 sm:px-6 py-3 flex items-center gap-2">
-                <Megaphone className="w-5 h-5 text-white" />
-                <h3 className="text-white font-semibold text-sm sm:text-base">
-                  ヘルプ求人が届いています
+            <PageSection>
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-2 h-2 rounded-full bg-[#FF3B30] shrink-0" />
+                <h3 className="font-semibold text-sm text-[#1D1D1F]">
+                  お手伝いできる方を募集中です
                 </h3>
-                <Badge className="bg-white/20 text-white ml-auto">
+                <span className="text-xs text-[#86868B] ml-auto">
                   {alerts.openHelpRequests.length}件
-                </Badge>
+                </span>
               </div>
-              <div className="px-4 sm:px-6 pt-3 pb-1">
-                <p className="text-sm text-[#86868B]">
-                  以下の店舗からヘルプが来ています。スケジュールに余裕のある方は「応募する」ボタンを押してください。店長に連絡が届きます。
-                </p>
-              </div>
-              <div className="p-4 sm:p-6 space-y-3">
+              <p className="text-xs text-[#86868B] mb-3">
+                もしスケジュールに余裕があれば、ご協力いただけると助かります。
+              </p>
+              <div className="space-y-2">
                 {alerts.openHelpRequests.map((req) => (
                   <div
                     key={`staff-help-${req.id}`}
                     onClick={() => router.push(`/dashboard/help-board/${req.id}`)}
-                    className="flex items-center justify-between gap-3 p-4 rounded-xl border border-[#E5E5EA] hover:border-[#FF3B30]/30 hover:bg-[#FF3B30]/5 cursor-pointer transition-all"
+                    className="flex items-center justify-between gap-3 p-3 rounded-xl border border-[#E5E5EA] hover:border-[#007AFF]/30 hover:bg-[#007AFF]/5 cursor-pointer transition-all"
                   >
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <MapPin className="w-4 h-4 text-[#FF3B30] shrink-0" />
-                        <span className="font-semibold text-sm text-[#1D1D1F]">{req.storeName}</span>
+                      <div className="flex items-center gap-2 mb-0.5">
+                        <MapPin className="w-3.5 h-3.5 text-[#FF3B30] shrink-0" />
+                        <span className="font-medium text-sm text-[#1D1D1F]">{req.storeName}</span>
                       </div>
-                      <p className="text-sm text-[#1D1D1F] ml-6">
+                      <p className="text-xs text-[#86868B] ml-5.5">
                         {formatAlertDate(req.needDate)} {req.needStart}〜{req.needEnd}
                       </p>
                       {req.memo && (
-                        <p className="text-xs text-[#86868B] ml-6 mt-1">{req.memo}</p>
+                        <p className="text-xs text-[#86868B] ml-5.5 mt-0.5">{req.memo}</p>
                       )}
                     </div>
-                    <Button size="sm" className="bg-[#FF3B30] hover:bg-[#E0352B] text-white rounded-xl shrink-0">
-                      応募する
+                    <Button size="sm" variant="outline" className="border-[#FF3B30]/40 text-[#FF3B30] hover:bg-[#FF3B30]/5 rounded-xl shrink-0 text-xs">
+                      協力する
                     </Button>
                   </div>
                 ))}
