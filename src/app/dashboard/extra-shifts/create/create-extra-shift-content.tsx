@@ -178,12 +178,20 @@ export function CreateExtraShiftContent({ user }: CreateExtraShiftContentProps) 
   return (
     <DashboardLayout
       user={user}
-      title="追加勤務希望を出す"
-      description="働ける日時を登録してください"
+      title={isAdmin ? '追加勤務希望を出す' : '追加で働きたい！'}
+      description={isAdmin ? 'スタッフの働ける日時を登録してください' : 'この日ヒマだから働けるよ！という日時を登録してください。店長に通知が届きます。'}
       actions={backButton}
     >
       <PageSection className="max-w-lg">
         <div className="space-y-6">
+          {/* スタッフ向け：自分の名前を表示 */}
+          {!isAdmin && (
+            <div className="p-3 bg-[#F5F5F7] rounded-xl">
+              <p className="text-sm text-[#86868B]">登録者</p>
+              <p className="text-base font-semibold text-[#1D1D1F]">{user.name}</p>
+            </div>
+          )}
+
           {/* オーナー向け：店舗選択 */}
           {user.role === 'owner' && (
             <div>
@@ -314,7 +322,7 @@ export function CreateExtraShiftContent({ user }: CreateExtraShiftContentProps) 
               value={memo}
               onChange={(e) => setMemo(e.target.value)}
               maxLength={50}
-              placeholder="例: どこの店でもOKです"
+              placeholder={isAdmin ? '例: どこの店でもOKです' : '例: どこの店舗でも大丈夫です！'}
               className="border-[#E5E5EA] text-[#1D1D1F] placeholder:text-[#86868B]"
             />
             <p className="text-xs text-[#86868B] mt-1 text-right">
@@ -344,7 +352,7 @@ export function CreateExtraShiftContent({ user }: CreateExtraShiftContentProps) 
               disabled={submitting}
               className="flex-1 bg-[#34C759] hover:bg-[#30D158] text-white rounded-xl"
             >
-              {submitting ? '送信中...' : '勤務希望を登録'}
+              {submitting ? '送信中...' : isAdmin ? '勤務希望を登録' : '働けます！と伝える'}
             </Button>
           </div>
         </div>
