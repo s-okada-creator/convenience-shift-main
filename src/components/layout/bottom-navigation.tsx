@@ -245,14 +245,14 @@ export const BottomNavigation = memo(function BottomNavigation({ user }: { user:
           {/* 追加で働きたいボタン（全ロール） */}
           <div className="mt-2">
             <Link
-              href="/dashboard/extra-shifts/create"
+              href="/dashboard/extra-shifts"
               onClick={closeMenu}
               className="flex items-center gap-3 w-full px-4 py-3 bg-gradient-to-r from-[#34C759] to-[#30D158] text-white rounded-xl"
             >
               <HandHeart className="h-5 w-5" />
               <div>
-                <p className="text-sm font-bold">追加で働きたい！</p>
-                <p className="text-[10px] opacity-80">シフトを増やしたい方はこちら</p>
+                <p className="text-sm font-bold">追加勤務募集</p>
+                <p className="text-[10px] opacity-80">募集を見る・応募する</p>
               </div>
             </Link>
           </div>

@@ -80,7 +80,29 @@ export async function GET(request: NextRequest) {
       ? await query.where(and(...conditions))
       : await query;
 
-    return NextResponse.json(result.map(normalizeTime));
+    // スタッフ用: 自分の応募状況を付与
+    let myApplicationMap: Record<number, { id: number; status: string }> = {};
+    if (session.role === 'staff') {
+      const myApps = await db
+        .select({
+          id: shiftApplications.id,
+          postingId: shiftApplications.postingId,
+          status: shiftApplications.status,
+        })
+        .from(shiftApplications)
+        .where(eq(shiftApplications.staffId, session.id));
+
+      myApplicationMap = Object.fromEntries(
+        myApps.map((a) => [a.postingId, { id: a.id, status: a.status }])
+      );
+    }
+
+    const enriched = result.map((r) => ({
+      ...normalizeTime(r),
+      myApplication: myApplicationMap[r.id] || null,
+    }));
+
+    return NextResponse.json(enriched);
   } catch (error) {
     return handleApiError(error, 'GET /api/shift-postings');
   }

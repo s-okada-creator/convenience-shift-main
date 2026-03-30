@@ -260,15 +260,15 @@ export const Sidebar = memo(function Sidebar({ user }: SidebarProps) {
         {/* 追加で働きたいボタン（全ロール） */}
         <div className="px-3 pb-3">
           <Link
-            href="/dashboard/extra-shifts/create"
+            href="/dashboard/extra-shifts"
             className="flex items-center gap-2 w-full px-4 py-3 bg-gradient-to-r from-[#34C759] to-[#30D158] text-white rounded-xl shadow-sm hover:shadow-md transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]"
           >
             <div className="w-8 h-8 bg-white/20 rounded-lg flex items-center justify-center">
               <HandHeart className="w-5 h-5" />
             </div>
             <div>
-              <p className="text-sm font-bold">追加で働きたい！</p>
-              <p className="text-[10px] opacity-80">シフトを増やしたい方はこちら</p>
+              <p className="text-sm font-bold">追加勤務募集</p>
+              <p className="text-[10px] opacity-80">募集を見る・応募する</p>
             </div>
           </Link>
         </div>

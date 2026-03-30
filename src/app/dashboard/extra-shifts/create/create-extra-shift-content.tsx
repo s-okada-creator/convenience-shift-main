@@ -20,13 +20,6 @@ interface Store {
   name: string;
 }
 
-interface StaffMember {
-  id: number;
-  name: string;
-  canWorkOtherStores: boolean;
-  storeId: number;
-}
-
 interface CreateExtraShiftContentProps {
   user: SessionUser;
 }
@@ -54,17 +47,15 @@ function getTodayStr(): string {
 export function CreateExtraShiftContent({ user }: CreateExtraShiftContentProps) {
   const router = useRouter();
   const [stores, setStores] = useState<Store[]>([]);
-  const [staffMembers, setStaffMembers] = useState<StaffMember[]>([]);
-  const [selectedStaffId, setSelectedStaffId] = useState<string>('');
   const [selectedStoreId, setSelectedStoreId] = useState<string>(user.storeId?.toString() || '');
   const [date, setDate] = useState<string>(getTodayStr());
   const [startTime, setStartTime] = useState<string>('');
   const [endTime, setEndTime] = useState<string>('');
-  const [memo, setMemo] = useState<string>('');
+  const [description, setDescription] = useState<string>('');
+  const [slots, setSlots] = useState<number>(1);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string>('');
 
-  const isAdmin = user.role === 'owner' || user.role === 'manager';
   const timeOptions = useMemo(() => generateTimeOptions(), []);
   const todayStr = useMemo(() => getTodayStr(), []);
 
@@ -80,32 +71,9 @@ export function CreateExtraShiftContent({ user }: CreateExtraShiftContentProps) 
     }
   }, []);
 
-  const fetchStaff = useCallback(async () => {
-    if (!isAdmin) return;
-    try {
-      const storeParam = user.role === 'owner' && selectedStoreId
-        ? `?storeId=${selectedStoreId}`
-        : user.storeId
-        ? `?storeId=${user.storeId}`
-        : '';
-      const res = await fetch(`/api/staff${storeParam}`);
-      if (res.ok) {
-        const data = await res.json();
-        // can_work_other_stores が true のスタッフのみ
-        setStaffMembers(data.filter((s: StaffMember) => s.canWorkOtherStores));
-      }
-    } catch (err) {
-      console.error('スタッフ取得エラー:', err);
-    }
-  }, [isAdmin, user.role, user.storeId, selectedStoreId]);
-
   useEffect(() => {
     fetchStores();
   }, [fetchStores]);
-
-  useEffect(() => {
-    fetchStaff();
-  }, [fetchStaff]);
 
   const endTimeOptions = useMemo(() => {
     if (!startTime) return timeOptions;
@@ -113,15 +81,16 @@ export function CreateExtraShiftContent({ user }: CreateExtraShiftContentProps) 
   }, [startTime, timeOptions]);
 
   const validationError = useMemo(() => {
-    if (isAdmin && !selectedStaffId) return 'スタッフを選択してください';
+    if (user.role === 'owner' && !selectedStoreId) return '店舗を選択してください';
     if (!date) return '日付を選択してください';
     if (date < todayStr) return '過去の日付は選択できません';
     if (!startTime) return '開始時間を選択してください';
     if (!endTime) return '終了時間を選択してください';
     if (endTime <= startTime) return '終了時間は開始時間より後にしてください';
-    if (memo.length > 50) return 'メモは50文字以内にしてください';
+    if (slots < 1) return '募集人数は1人以上にしてください';
+    if (description.length > 100) return 'メモは100文字以内にしてください';
     return '';
-  }, [isAdmin, selectedStaffId, date, todayStr, startTime, endTime, memo]);
+  }, [user.role, selectedStoreId, date, todayStr, startTime, endTime, slots, description]);
 
   const handleSubmit = useCallback(async () => {
     if (validationError) {
@@ -134,17 +103,18 @@ export function CreateExtraShiftContent({ user }: CreateExtraShiftContentProps) 
 
     try {
       const body: Record<string, unknown> = {
-        availableDate: date,
-        availableStart: startTime,
-        availableEnd: endTime,
-        memo: memo.trim() || null,
+        date,
+        startTime,
+        endTime,
+        slots,
+        description: description.trim() || null,
       };
 
-      if (isAdmin && selectedStaffId) {
-        body.staffId = parseInt(selectedStaffId);
+      if (user.role === 'owner' && selectedStoreId) {
+        body.storeId = parseInt(selectedStoreId);
       }
 
-      const res = await fetch('/api/proactive-offers', {
+      const res = await fetch('/api/shift-postings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -154,15 +124,15 @@ export function CreateExtraShiftContent({ user }: CreateExtraShiftContentProps) 
         router.push('/dashboard/extra-shifts');
       } else {
         const data = await res.json();
-        setError(data.error || '勤務希望の作成に失敗しました');
+        setError(data.error || '募集の投稿に失敗しました');
       }
     } catch (err) {
       console.error('作成エラー:', err);
-      setError('勤務希望の作成に失敗しました');
+      setError('募集の投稿に失敗しました');
     } finally {
       setSubmitting(false);
     }
-  }, [validationError, date, startTime, endTime, memo, isAdmin, selectedStaffId, router]);
+  }, [validationError, date, startTime, endTime, slots, description, user.role, selectedStoreId, router]);
 
   const backButton = (
     <Button
@@ -171,39 +141,28 @@ export function CreateExtraShiftContent({ user }: CreateExtraShiftContentProps) 
       className="rounded-xl border-[#E5E5EA] hover:bg-[#F5F5F7]"
     >
       <ArrowLeft className="w-4 h-4 mr-1" />
-      勤務希望ボードへ戻る
+      募集ボードへ戻る
     </Button>
   );
 
   return (
     <DashboardLayout
       user={user}
-      title={isAdmin ? '追加勤務希望を出す' : '追加で働きたい！'}
-      description={isAdmin ? 'スタッフの働ける日時を登録してください' : 'この日ヒマだから働けるよ！という日時を登録してください。店長に通知が届きます。'}
+      title="追加勤務の募集を出す"
+      description="人手が足りない日時を投稿して、スタッフからの応募を待ちましょう"
       actions={backButton}
     >
       <PageSection className="max-w-lg">
         <div className="space-y-6">
-          {/* スタッフ向け：自分の名前を表示 */}
-          {!isAdmin && (
-            <div className="p-3 bg-[#F5F5F7] rounded-xl">
-              <p className="text-sm text-[#86868B]">登録者</p>
-              <p className="text-base font-semibold text-[#1D1D1F]">{user.name}</p>
-            </div>
-          )}
-
           {/* オーナー向け：店舗選択 */}
           {user.role === 'owner' && (
             <div>
               <label className="block text-sm font-medium text-[#1D1D1F] mb-2">
-                店舗 <span className="text-[#FF3B30]">*</span>
+                募集店舗 <span className="text-[#FF3B30]">*</span>
               </label>
               <Select
                 value={selectedStoreId}
-                onValueChange={(v) => {
-                  setSelectedStoreId(v);
-                  setSelectedStaffId('');
-                }}
+                onValueChange={setSelectedStoreId}
               >
                 <SelectTrigger className="w-full border-[#E5E5EA] bg-white">
                   <SelectValue placeholder="店舗を選択" />
@@ -217,36 +176,7 @@ export function CreateExtraShiftContent({ user }: CreateExtraShiftContentProps) 
                 </SelectContent>
               </Select>
               <p className="text-xs text-[#86868B] mt-1">
-                スタッフの所属店舗を選択してください
-              </p>
-            </div>
-          )}
-
-          {/* マネージャー/オーナー向け：スタッフ選択 */}
-          {isAdmin && (
-            <div>
-              <label className="block text-sm font-medium text-[#1D1D1F] mb-2">
-                スタッフ <span className="text-[#FF3B30]">*</span>
-              </label>
-              <Select value={selectedStaffId} onValueChange={setSelectedStaffId}>
-                <SelectTrigger className="w-full border-[#E5E5EA] bg-white">
-                  <SelectValue placeholder="スタッフを選択" />
-                </SelectTrigger>
-                <SelectContent>
-                  {staffMembers.map((s) => (
-                    <SelectItem key={s.id} value={s.id.toString()}>
-                      {s.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {staffMembers.length === 0 && (
-                <p className="text-xs text-[#FF9500] mt-1">
-                  他店勤務可能なスタッフがいません
-                </p>
-              )}
-              <p className="text-xs text-[#86868B] mt-1">
-                他店舗勤務可能なスタッフのみ表示されます
+                人手が必要な店舗を選択してください
               </p>
             </div>
           )}
@@ -313,20 +243,40 @@ export function CreateExtraShiftContent({ user }: CreateExtraShiftContentProps) 
             )}
           </div>
 
+          {/* 募集人数 */}
+          <div>
+            <label className="block text-sm font-medium text-[#1D1D1F] mb-2">
+              募集人数
+            </label>
+            <Select value={slots.toString()} onValueChange={(v) => setSlots(parseInt(v))}>
+              <SelectTrigger className="w-full border-[#E5E5EA] bg-white">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <SelectItem key={n} value={n.toString()}>
+                    {n}人
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
           {/* メモ */}
           <div>
             <label className="block text-sm font-medium text-[#1D1D1F] mb-2">
               メモ（任意）
             </label>
-            <Input
-              value={memo}
-              onChange={(e) => setMemo(e.target.value)}
-              maxLength={50}
-              placeholder={isAdmin ? '例: どこの店でもOKです' : '例: どこの店舗でも大丈夫です！'}
-              className="border-[#E5E5EA] text-[#1D1D1F] placeholder:text-[#86868B]"
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              maxLength={100}
+              rows={3}
+              placeholder="例: レジ対応できる方歓迎です"
+              className="w-full rounded-xl border border-[#E5E5EA] bg-white px-3 py-2 text-sm text-[#1D1D1F] placeholder:text-[#86868B] focus:outline-none focus:ring-2 focus:ring-[#34C759]/30 focus:border-[#34C759] resize-none"
             />
             <p className="text-xs text-[#86868B] mt-1 text-right">
-              {memo.length}/50
+              {description.length}/100
             </p>
           </div>
 
@@ -352,7 +302,7 @@ export function CreateExtraShiftContent({ user }: CreateExtraShiftContentProps) 
               disabled={submitting}
               className="flex-1 bg-[#34C759] hover:bg-[#30D158] text-white rounded-xl"
             >
-              {submitting ? '送信中...' : isAdmin ? '勤務希望を登録' : '働けます！と伝える'}
+              {submitting ? '投稿中...' : '募集を投稿'}
             </Button>
           </div>
         </div>

@@ -1,16 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { shiftPostings, shiftApplications, shifts, stores, staff } from '@/lib/db/schema';
+import { shiftPostings, shiftApplications, shifts, stores, staff, notifications } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { requireAdmin, canAccessStore } from '@/lib/auth';
 import { handleApiError, ApiErrors } from '@/lib/api-error';
-import { formatDateForLine, notifyStoreManagers, notifyStaff, APP_URL } from '@/lib/line';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
 }
 
-// 応募を確定
+// 応募を確定 or 見送り
 export async function POST(request: NextRequest, { params }: RouteParams) {
   try {
     const session = await requireAdmin();
@@ -18,7 +17,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const postingId = parseInt(id);
     const body = await request.json();
 
-    const { applicationId } = body;
+    const { applicationId, action } = body;
 
     if (!applicationId) {
       throw ApiErrors.badRequest('applicationIdが必要です');
@@ -51,9 +50,43 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     }
 
     if (application.status !== 'pending') {
-      throw ApiErrors.badRequest('この応募は確定できません');
+      throw ApiErrors.badRequest('この応募は既に処理済みです');
     }
 
+    // 見送りの場合
+    if (action === 'reject') {
+      await db
+        .update(shiftApplications)
+        .set({ status: 'rejected' })
+        .where(eq(shiftApplications.id, applicationId));
+
+      // アプリ内通知（応募者へ）
+      try {
+        const [store] = await db.select().from(stores).where(eq(stores.id, posting.storeId));
+        await db.insert(notifications).values({
+          userId: application.staffId,
+          type: 'shift_posting_rejected',
+          payload: {
+            postingId,
+            storeName: store?.name || '',
+            date: posting.date,
+            startTime: posting.startTime.slice(0, 5),
+            endTime: posting.endTime.slice(0, 5),
+          },
+        });
+      } catch (notifyError) {
+        console.error('通知エラー:', notifyError);
+      }
+
+      return NextResponse.json({
+        success: true,
+        message: '応募を見送りました',
+        applicationId,
+        postingId,
+      });
+    }
+
+    // 確定の場合
     // 定員チェック
     if (posting.filledCount >= posting.slots) {
       throw ApiErrors.badRequest('この求人は既に定員に達しています');
@@ -82,47 +115,37 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       .set(updateData)
       .where(eq(shiftPostings.id, postingId));
 
-    // シフトを自動登録
+    // シフトを自動登録（応募者の所属店舗と募集店舗が異なる場合は他店ヘルプ扱い）
+    const [applicantStaff] = await db.select({ storeId: staff.storeId }).from(staff).where(eq(staff.id, application.staffId));
+    const isOtherStore = applicantStaff ? applicantStaff.storeId !== posting.storeId : false;
+
     await db.insert(shifts).values({
       staffId: application.staffId,
       storeId: posting.storeId,
       date: posting.date,
       startTime: posting.startTime,
       endTime: posting.endTime,
-      isHelpFromOtherStore: false,
+      isHelpFromOtherStore: isOtherStore,
     });
 
-    // LINE通知
+    // アプリ内通知（確定されたスタッフへ）
     try {
       const [store] = await db.select().from(stores).where(eq(stores.id, posting.storeId));
-      const [confirmedStaff] = await db.select().from(staff).where(eq(staff.id, application.staffId));
-      const formattedDate = formatDateForLine(posting.date);
-      const managerMessage = [
-        `✅ シフト求人が確定しました！`,
-        ``,
-        `📍 ${store?.name || ''}`,
-        `📅 ${formattedDate} ${posting.startTime.slice(0, 5)}〜${posting.endTime.slice(0, 5)}`,
-        `👤 @${confirmedStaff?.name || ''}さんが確定`,
-        `📊 ${newFilledCount}/${posting.slots}人 確定済み`,
-        `📋 シフト自動登録済み`,
-        ``,
-        `🔗 ${APP_URL}/dashboard/shift-board/${postingId}`,
-      ].join('\n');
-      await notifyStoreManagers(posting.storeId, managerMessage);
-      // 確定されたスタッフ本人にも通知
-      const staffMessage = [
-        `✅ シフトが確定しました！`,
-        ``,
-        `📍 勤務先: ${store?.name || ''}`,
-        `📅 ${formattedDate} ${posting.startTime.slice(0, 5)}〜${posting.endTime.slice(0, 5)}`,
-        `📋 シフトは自動で登録されています`,
-        ``,
-        `👇 自分のシフトを確認`,
-        `🔗 ${APP_URL}/dashboard/my-shifts`,
-      ].join('\n');
-      await notifyStaff(application.staffId, staffMessage);
-    } catch (lineError) {
-      console.error('LINE通知エラー（確定自体は成功）:', lineError);
+      await db.insert(notifications).values({
+        userId: application.staffId,
+        type: 'shift_posting_confirmed',
+        payload: {
+          postingId,
+          storeName: store?.name || '',
+          date: posting.date,
+          startTime: posting.startTime.slice(0, 5),
+          endTime: posting.endTime.slice(0, 5),
+          filledCount: newFilledCount,
+          totalSlots: posting.slots,
+        },
+      });
+    } catch (notifyError) {
+      console.error('通知エラー:', notifyError);
     }
 
     return NextResponse.json({

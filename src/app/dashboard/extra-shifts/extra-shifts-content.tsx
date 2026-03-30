@@ -2,177 +2,76 @@
 
 import { useState, useEffect, useMemo, useCallback, memo } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { DashboardLayout, PageSection } from '@/components/layout/dashboard-layout';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import { Input } from '@/components/ui/input';
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   Clock,
   MapPin,
-  MessageSquare,
   Plus,
   Inbox,
-  User,
-  CheckCircle,
+  Users,
+  FileText,
+  Loader2,
+  CalendarDays,
 } from 'lucide-react';
 import type { SessionUser } from '@/lib/auth';
 
-interface Store {
+interface ShiftPosting {
   id: number;
-  name: string;
-}
-
-interface ProactiveOffer {
-  id: number;
-  staffId: number;
-  staffName: string;
   storeId: number;
   storeName: string;
-  availableDate: string;
-  availableStart: string;
-  availableEnd: string;
-  memo: string | null;
-  status: string;
-  acceptedByStoreId: number | null;
-  acceptedBy: number | null;
+  date: string;
+  startTime: string;
+  endTime: string;
+  slots: number;
+  filledCount: number;
+  description: string | null;
+  status: 'open' | 'filled' | 'closed' | 'expired';
+  applicationCount: number;
   createdAt: string;
+  myApplication?: {
+    id: number;
+    status: string;
+  } | null;
 }
 
 interface ExtraShiftsContentProps {
   user: SessionUser;
 }
 
-type StatusFilter = 'all' | 'open' | 'accepted' | 'cancelled';
+type StoreTab = 'my-store' | 'other-stores';
+type StatusFilter = 'open' | 'filled' | 'closed';
 
-const statusConfig: Record<string, { label: string; color: string }> = {
-  open: { label: '募集中', color: 'bg-[#34C759]/10 text-[#34C759]' },
-  accepted: { label: '確定', color: 'bg-[#007AFF]/10 text-[#007AFF]' },
-  cancelled: { label: 'キャンセル', color: 'bg-[#86868B]/10 text-[#86868B]' },
-  expired: { label: '期限切れ', color: 'bg-[#86868B]/10 text-[#86868B]' },
+const STATUS_CONFIG: Record<StatusFilter, { label: string; bgColor: string; textColor: string }> = {
+  open: { label: '募集中', bgColor: 'bg-[#34C759]/10', textColor: 'text-[#34C759]' },
+  filled: { label: '確定済み', bgColor: 'bg-[#007AFF]/10', textColor: 'text-[#007AFF]' },
+  closed: { label: 'クローズ', bgColor: 'bg-[#86868B]/10', textColor: 'text-[#86868B]' },
 };
+
+const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土'];
 
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr + 'T00:00:00');
   const month = d.getMonth() + 1;
   const day = d.getDate();
-  const dayOfWeek = ['日', '月', '火', '水', '木', '金', '土'][d.getDay()];
-  return `${month}/${day} (${dayOfWeek})`;
+  const weekday = WEEKDAYS[d.getDay()];
+  return `${month}/${day}（${weekday}）`;
 }
 
-function formatTimeRange(start: string, end: string): string {
-  return `${start.slice(0, 5)} - ${end.slice(0, 5)}`;
+function formatTime(time: string): string {
+  return time.slice(0, 5);
 }
-
-function getRelativeTime(dateStr: string): string {
-  const now = Date.now();
-  const created = new Date(dateStr).getTime();
-  const diffMs = now - created;
-
-  if (diffMs < 0) return 'たった今';
-
-  const diffSec = Math.floor(diffMs / 1000);
-  if (diffSec < 60) return 'たった今';
-
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin}分前`;
-
-  const diffHour = Math.floor(diffMin / 60);
-  if (diffHour < 24) return `${diffHour}時間前`;
-
-  const diffDay = Math.floor(diffHour / 24);
-  if (diffDay < 30) return `${diffDay}日前`;
-
-  const diffMonth = Math.floor(diffDay / 30);
-  return `${diffMonth}ヶ月前`;
-}
-
-const StatusBadge = memo(function StatusBadge({ status }: { status: string }) {
-  const config = statusConfig[status] || statusConfig.cancelled;
-  return (
-    <Badge className={config.color}>
-      {config.label}
-    </Badge>
-  );
-});
-
-const OfferCard = memo(function OfferCard({
-  offer,
-  isAdmin,
-  onAccept,
-  accepting,
-}: {
-  offer: ProactiveOffer;
-  isAdmin: boolean;
-  onAccept: (id: number) => void;
-  accepting: number | null;
-}) {
-  return (
-    <div className="bg-white rounded-2xl shadow-sm border border-[#E5E5EA] p-4 sm:p-5 transition-all duration-200 hover:shadow-md">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <StatusBadge status={offer.status} />
-          </div>
-
-          <div className="mt-3 space-y-1.5">
-            <div className="flex items-center gap-2 text-sm text-[#1D1D1F]">
-              <User className="w-4 h-4 text-[#86868B] shrink-0" />
-              <span className="font-medium truncate">{offer.staffName}</span>
-            </div>
-            <div className="flex items-center gap-2 text-sm text-[#1D1D1F]">
-              <MapPin className="w-4 h-4 text-[#86868B] shrink-0" />
-              <span className="truncate">{offer.storeName}</span>
-            </div>
-            <div className="flex items-center gap-2 text-sm text-[#1D1D1F]">
-              <Clock className="w-4 h-4 text-[#86868B] shrink-0" />
-              <span>
-                {formatDate(offer.availableDate)}{' '}
-                {formatTimeRange(offer.availableStart, offer.availableEnd)}
-              </span>
-            </div>
-            {offer.memo && (
-              <div className="flex items-start gap-2 text-sm text-[#86868B]">
-                <MessageSquare className="w-4 h-4 shrink-0 mt-0.5" />
-                <span className="line-clamp-1">{offer.memo}</span>
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="text-right shrink-0 flex flex-col items-end gap-2">
-          <p className="text-xs text-[#86868B]">{getRelativeTime(offer.createdAt)}</p>
-          {isAdmin && offer.status === 'open' && (
-            <Button
-              size="sm"
-              onClick={() => onAccept(offer.id)}
-              disabled={accepting === offer.id}
-              className="bg-[#34C759] hover:bg-[#30D158] text-white rounded-xl text-xs"
-            >
-              {accepting === offer.id ? '処理中...' : 'この人にお願いする'}
-            </Button>
-          )}
-        </div>
-      </div>
-
-      {offer.status === 'accepted' && (
-        <div className="mt-3 pt-3 border-t border-[#E5E5EA]">
-          <span className="flex items-center gap-1 text-xs font-medium text-[#007AFF]">
-            <CheckCircle className="w-3 h-3" />
-            勤務確定済み
-          </span>
-        </div>
-      )}
-    </div>
-  );
-});
 
 const LoadingSkeleton = memo(function LoadingSkeleton() {
   return (
@@ -195,220 +94,304 @@ const EmptyState = memo(function EmptyState({ message }: { message: string }) {
 
 export function ExtraShiftsContent({ user }: ExtraShiftsContentProps) {
   const router = useRouter();
-  const [offers, setOffers] = useState<ProactiveOffer[]>([]);
-  const [allStores, setAllStores] = useState<Store[]>([]);
-  const [selectedStoreId, setSelectedStoreId] = useState<string>('all');
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [postings, setPostings] = useState<ShiftPosting[]>([]);
   const [loading, setLoading] = useState(true);
-  const [accepting, setAccepting] = useState<number | null>(null);
-  const [acceptStoreId, setAcceptStoreId] = useState<string>('');
+  const [storeTab, setStoreTab] = useState<StoreTab>('my-store');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('open');
+  const [applyModalOpen, setApplyModalOpen] = useState(false);
+  const [applyTarget, setApplyTarget] = useState<ShiftPosting | null>(null);
+  const [applyMessage, setApplyMessage] = useState('');
+  const [applying, setApplying] = useState(false);
 
   const isAdmin = user.role === 'owner' || user.role === 'manager';
 
-  const fetchStores = useCallback(async () => {
-    try {
-      const res = await fetch('/api/stores');
-      if (res.ok) {
-        const data = await res.json();
-        setAllStores(data);
-        // マネージャーの場合はデフォルトで自店を受入れ店舗に
-        if (user.role === 'manager' && user.storeId) {
-          setAcceptStoreId(user.storeId.toString());
-        }
-      }
-    } catch (error) {
-      console.error('店舗取得エラー:', error);
-    }
-  }, [user.role, user.storeId]);
-
-  const fetchOffers = useCallback(async () => {
+  const fetchPostings = useCallback(async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams();
-      if (selectedStoreId !== 'all') {
-        params.append('storeId', selectedStoreId);
-      }
-      if (statusFilter !== 'all') {
-        params.append('status', statusFilter);
-      }
-      const res = await fetch(`/api/proactive-offers?${params.toString()}`);
+      params.set('status', statusFilter);
+      params.set('source', 'extra-shifts');
+      const res = await fetch(`/api/shift-postings?${params.toString()}`);
       if (res.ok) {
         const data = await res.json();
-        setOffers(data);
+        setPostings(data);
       }
     } catch (error) {
-      console.error('追加勤務希望取得エラー:', error);
+      console.error('募集取得エラー:', error);
     } finally {
       setLoading(false);
     }
-  }, [selectedStoreId, statusFilter]);
+  }, [statusFilter]);
 
   useEffect(() => {
-    fetchStores();
-  }, [fetchStores]);
+    fetchPostings();
+  }, [fetchPostings]);
 
-  useEffect(() => {
-    fetchOffers();
-  }, [fetchOffers]);
-
-  const sortedOffers = useMemo(() => {
-    const sorted = [...offers].sort((a, b) => {
-      // 募集中を先頭にピン留め
-      if (a.status === 'open' && b.status !== 'open') return -1;
-      if (a.status !== 'open' && b.status === 'open') return 1;
-      // 新しい順
-      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+  const filteredPostings = useMemo(() => {
+    return postings.filter((p) => {
+      if (storeTab === 'my-store') {
+        return p.storeId === user.storeId;
+      } else {
+        return p.storeId !== user.storeId;
+      }
     });
-    return sorted;
-  }, [offers]);
+  }, [postings, storeTab, user.storeId]);
 
-  const handleAccept = useCallback(async (offerId: number) => {
-    const targetStoreId = user.role === 'owner' ? acceptStoreId : user.storeId?.toString();
-    if (!targetStoreId) {
-      alert('受入れ店舗を選択してください');
-      return;
-    }
+  const handleApplyClick = (posting: ShiftPosting) => {
+    setApplyTarget(posting);
+    setApplyMessage('');
+    setApplyModalOpen(true);
+  };
 
-    if (!confirm('この勤務希望を受け入れますか？シフトが自動作成されます。')) {
-      return;
-    }
-
-    setAccepting(offerId);
+  const handleApplySubmit = async () => {
+    if (!applyTarget) return;
+    setApplying(true);
     try {
-      const res = await fetch(`/api/proactive-offers/${offerId}`, {
-        method: 'PUT',
+      const res = await fetch(`/api/shift-postings/${applyTarget.id}/apply`, {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'accept',
-          acceptingStoreId: parseInt(targetStoreId),
-        }),
+        body: JSON.stringify({ message: applyMessage.trim() || null }),
       });
       if (res.ok) {
-        fetchOffers();
+        setApplyModalOpen(false);
+        fetchPostings();
       } else {
         const data = await res.json();
-        alert(data.error || '受入れに失敗しました');
+        alert(data.error || '応募に失敗しました');
       }
-    } catch (error) {
-      console.error('受入れエラー:', error);
-      alert('受入れに失敗しました');
+    } catch {
+      alert('応募に失敗しました');
     } finally {
-      setAccepting(null);
+      setApplying(false);
     }
-  }, [user.role, user.storeId, acceptStoreId, fetchOffers]);
+  };
 
-  const storeSelector = isAdmin ? (
-    <Select value={selectedStoreId} onValueChange={setSelectedStoreId}>
-      <SelectTrigger className="w-[180px] border-[#E5E5EA] bg-white">
-        <SelectValue placeholder="店舗を選択" />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="all">すべての店舗</SelectItem>
-        {allStores.map((store) => (
-          <SelectItem key={store.id} value={store.id.toString()}>
-            {store.name}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  ) : null;
-
-  const headerActions = (
-    <div className="flex items-center gap-3">
-      {storeSelector}
-      <Button
-        onClick={() => router.push('/dashboard/extra-shifts/create')}
-        className="bg-[#34C759] hover:bg-[#30D158] text-white rounded-xl shadow-sm"
-      >
+  const headerActions = isAdmin ? (
+    <Link href="/dashboard/extra-shifts/create">
+      <Button className="bg-[#34C759] hover:bg-[#30D158] text-white rounded-xl shadow-sm">
         <Plus className="w-4 h-4 mr-1" />
-        勤務希望を出す
+        募集を出す
       </Button>
-    </div>
-  );
+    </Link>
+  ) : undefined;
 
   return (
     <DashboardLayout
       user={user}
-      title="追加勤務希望ボード"
-      description="追加で働きたいスタッフの一覧"
+      title="追加勤務募集ボード"
+      description="追加で働きたい方はここから募集を確認・応募できます"
       actions={headerActions}
     >
       <PageSection>
-        {/* オーナー向け：受入れ店舗選択 */}
-        {user.role === 'owner' && (
-          <div className="mb-4 p-3 bg-[#F5F5F7] rounded-xl">
-            <label className="block text-xs font-medium text-[#86868B] mb-1">
-              受入れ店舗（お願いする際の勤務先）
-            </label>
-            <Select value={acceptStoreId} onValueChange={setAcceptStoreId}>
-              <SelectTrigger className="w-full border-[#E5E5EA] bg-white">
-                <SelectValue placeholder="店舗を選択" />
-              </SelectTrigger>
-              <SelectContent>
-                {allStores.map((store) => (
-                  <SelectItem key={store.id} value={store.id.toString()}>
-                    {store.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        )}
-
-        {/* ステータスフィルタータブ */}
-        <div className="mb-6">
+        {/* 自店舗 / 他店舗 タブ */}
+        <div className="mb-4">
           <Tabs
-            value={statusFilter}
-            onValueChange={(v) => setStatusFilter(v as StatusFilter)}
+            value={storeTab}
+            onValueChange={(v) => setStoreTab(v as StoreTab)}
           >
-            <TabsList className="bg-[#E5E5EA]/50 p-1 rounded-xl w-full sm:w-auto flex overflow-x-auto">
+            <TabsList className="bg-[#E5E5EA]/50 p-1 rounded-xl w-full sm:w-auto flex">
               <TabsTrigger
-                value="all"
+                value="my-store"
                 className="rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm text-sm flex-1 sm:flex-initial"
               >
-                全て
+                自店舗のヘルプ
               </TabsTrigger>
               <TabsTrigger
-                value="open"
+                value="other-stores"
                 className="rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm text-sm flex-1 sm:flex-initial"
               >
-                募集中
-              </TabsTrigger>
-              <TabsTrigger
-                value="accepted"
-                className="rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm text-sm flex-1 sm:flex-initial"
-              >
-                確定
-              </TabsTrigger>
-              <TabsTrigger
-                value="cancelled"
-                className="rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm text-sm flex-1 sm:flex-initial"
-              >
-                キャンセル
+                他店舗のヘルプ
               </TabsTrigger>
             </TabsList>
           </Tabs>
         </div>
 
-        {/* 勤務希望リスト */}
+        {/* ステータスフィルター */}
+        <div className="mb-6">
+          <div className="flex bg-[#F5F5F7] rounded-xl p-1 gap-1 w-full sm:w-auto">
+            {(Object.keys(STATUS_CONFIG) as StatusFilter[]).map((status) => (
+              <button
+                key={status}
+                type="button"
+                onClick={() => setStatusFilter(status)}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 flex-1 sm:flex-initial ${
+                  statusFilter === status
+                    ? 'bg-white text-[#1D1D1F] shadow-sm'
+                    : 'text-[#86868B] hover:text-[#1D1D1F]'
+                }`}
+              >
+                {STATUS_CONFIG[status].label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* カード一覧 */}
         {loading ? (
           <LoadingSkeleton />
-        ) : sortedOffers.length === 0 ? (
-          <EmptyState message="追加勤務希望はありません" />
+        ) : filteredPostings.length === 0 ? (
+          <EmptyState
+            message={
+              storeTab === 'my-store'
+                ? '自店舗の募集はありません'
+                : '他店舗の募集はありません'
+            }
+          />
         ) : (
-          <div className="space-y-3">
-            {sortedOffers.map((offer) => (
-              <OfferCard
-                key={offer.id}
-                offer={offer}
-                isAdmin={isAdmin}
-                onAccept={handleAccept}
-                accepting={accepting}
-              />
-            ))}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filteredPostings.map((posting) => {
+              const slotsRemaining = posting.slots - posting.filledCount;
+              const statusConf = STATUS_CONFIG[posting.status as StatusFilter] || STATUS_CONFIG.closed;
+              const hasApplied = posting.myApplication != null;
+              const applicationStatus = posting.myApplication?.status;
+
+              return (
+                <div
+                  key={posting.id}
+                  className="bg-white rounded-2xl shadow-sm border border-[#E5E5EA] p-4 sm:p-5 hover:shadow-md transition-shadow duration-200 flex flex-col"
+                >
+                  {/* ヘッダー */}
+                  <div className="flex items-start justify-between mb-3">
+                    <h3 className="text-base font-semibold text-[#1D1D1F] truncate">
+                      {posting.storeName}
+                    </h3>
+                    <Badge
+                      className={`${statusConf.bgColor} ${statusConf.textColor} border-0 text-xs font-medium shrink-0 ml-2`}
+                    >
+                      {statusConf.label}
+                    </Badge>
+                  </div>
+
+                  {/* 詳細 */}
+                  <div className="space-y-2 flex-1">
+                    <div className="flex items-center gap-2 text-sm text-[#1D1D1F]">
+                      <CalendarDays className="w-4 h-4 text-[#86868B] shrink-0" />
+                      <span>
+                        {formatDate(posting.date)} {formatTime(posting.startTime)}〜
+                        {formatTime(posting.endTime)}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 text-sm text-[#1D1D1F]">
+                      <Users className="w-4 h-4 text-[#86868B] shrink-0" />
+                      <span>
+                        残り
+                        <span
+                          className={`font-semibold ${
+                            slotsRemaining > 0 ? 'text-[#FF9500]' : 'text-[#86868B]'
+                          }`}
+                        >
+                          {slotsRemaining}枠
+                        </span>
+                        （{posting.filledCount}/{posting.slots}名確定）
+                      </span>
+                    </div>
+                    {posting.description && (
+                      <div className="flex items-start gap-2 text-sm text-[#86868B]">
+                        <FileText className="w-4 h-4 shrink-0 mt-0.5" />
+                        <span className="line-clamp-2">{posting.description}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* アクション */}
+                  <div className="mt-4 pt-3 border-t border-[#F5F5F7]">
+                    {isAdmin ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          router.push(`/dashboard/extra-shifts/${posting.id}`)
+                        }
+                        className="w-full text-center text-sm font-medium text-[#34C759] hover:text-[#30D158] transition-colors py-1"
+                      >
+                        詳細を見る
+                      </button>
+                    ) : hasApplied ? (
+                      <div className="text-center">
+                        <Badge
+                          className={`text-xs font-medium border-0 ${
+                            applicationStatus === 'confirmed'
+                              ? 'bg-[#34C759]/10 text-[#34C759]'
+                              : applicationStatus === 'rejected'
+                              ? 'bg-[#FF3B30]/10 text-[#FF3B30]'
+                              : 'bg-[#FF9500]/10 text-[#FF9500]'
+                          }`}
+                        >
+                          {applicationStatus === 'confirmed'
+                            ? '確定済み'
+                            : applicationStatus === 'rejected'
+                            ? '見送り'
+                            : '応募済み'}
+                        </Badge>
+                      </div>
+                    ) : posting.status === 'open' && slotsRemaining > 0 ? (
+                      <Button
+                        onClick={() => handleApplyClick(posting)}
+                        className="w-full bg-[#34C759] hover:bg-[#30D158] text-white rounded-xl text-sm"
+                      >
+                        応募する
+                      </Button>
+                    ) : (
+                      <p className="text-center text-xs text-[#86868B]">募集終了</p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </PageSection>
+
+      {/* 応募モーダル */}
+      <Dialog open={applyModalOpen} onOpenChange={setApplyModalOpen}>
+        <DialogContent className="rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-semibold text-[#1D1D1F]">
+              この募集に応募する
+            </DialogTitle>
+            <DialogDescription className="text-sm text-[#86868B]">
+              {applyTarget && (
+                <>
+                  {applyTarget.storeName} / {formatDate(applyTarget.date)}{' '}
+                  {formatTime(applyTarget.startTime)}〜{formatTime(applyTarget.endTime)}
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="mt-2">
+            <label className="block text-sm font-medium text-[#1D1D1F] mb-1.5">
+              メッセージ（任意）
+            </label>
+            <textarea
+              value={applyMessage}
+              onChange={(e) => setApplyMessage(e.target.value)}
+              placeholder="例: この時間帯なら出れます！"
+              maxLength={100}
+              rows={3}
+              className="w-full rounded-xl border border-[#E5E5EA] bg-white px-3 py-2 text-sm text-[#1D1D1F] placeholder:text-[#86868B] focus:outline-none focus:ring-2 focus:ring-[#34C759]/30 focus:border-[#34C759] resize-none"
+            />
+            <p className="text-xs text-[#86868B] mt-1 text-right">
+              {applyMessage.length}/100
+            </p>
+          </div>
+          <DialogFooter className="mt-2">
+            <Button
+              variant="outline"
+              onClick={() => setApplyModalOpen(false)}
+              className="rounded-xl"
+            >
+              キャンセル
+            </Button>
+            <Button
+              onClick={handleApplySubmit}
+              disabled={applying}
+              className="bg-[#34C759] hover:bg-[#30D158] text-white rounded-xl gap-2"
+            >
+              {applying && <Loader2 className="w-4 h-4 animate-spin" />}
+              応募する
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </DashboardLayout>
   );
 }

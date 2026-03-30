@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { shiftPostings, shiftApplications, stores, staff } from '@/lib/db/schema';
+import { shiftPostings, shiftApplications, stores, staff, notifications } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { requireAuth } from '@/lib/auth';
 import { handleApiError, ApiErrors } from '@/lib/api-error';
-import { formatDateForLine, notifyStoreManagers, APP_URL } from '@/lib/line';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -65,27 +64,42 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       .from(shiftApplications)
       .where(eq(shiftApplications.postingId, postingId));
 
-    // LINE通知
+    // アプリ内通知（募集を出した店舗のマネージャーへ）
     try {
       const [store] = await db.select().from(stores).where(eq(stores.id, posting.storeId));
       const [applicant] = await db.select().from(staff).where(eq(staff.id, session.id));
-      const formattedDate = formatDateForLine(posting.date);
-      const lineMessage = [
-        `🙋 シフト求人に応募がありました！`,
-        ``,
-        `📍 ${store?.name || ''}`,
-        `📅 ${formattedDate} ${posting.startTime.slice(0, 5)}〜${posting.endTime.slice(0, 5)}`,
-        `👤 応募者: @${applicant?.name || session.name}さん`,
-        message ? `💬 「${message}」` : null,
-        ``,
-        `📊 募集: ${posting.slots}人 / 確定: ${posting.filledCount}人 / 応募: ${applicationCount.length}件`,
-        ``,
-        `👇 確認して確定してください`,
-        `🔗 ${APP_URL}/dashboard/shift-board/${postingId}`,
-      ].filter(Boolean).join('\n');
-      await notifyStoreManagers(posting.storeId, lineMessage);
-    } catch (lineError) {
-      console.error('LINE通知エラー（応募自体は成功）:', lineError);
+      // 該当店舗のマネージャー/オーナーに通知
+      const managers = await db
+        .select({ id: staff.id })
+        .from(staff)
+        .where(
+          and(
+            eq(staff.storeId, posting.storeId),
+            // role check: owner or manager
+          )
+        );
+      // postedByにも通知
+      const notifyTargets = new Set([posting.postedBy, ...managers.map(m => m.id)]);
+      const notificationRecords = [...notifyTargets]
+        .filter(id => id !== session.id)
+        .map((userId) => ({
+          userId,
+          type: 'shift_posting_application',
+          payload: {
+            postingId,
+            storeName: store?.name || '',
+            applicantName: applicant?.name || session.name,
+            date: posting.date,
+            startTime: posting.startTime.slice(0, 5),
+            endTime: posting.endTime.slice(0, 5),
+            message: message || null,
+          },
+        }));
+      if (notificationRecords.length > 0) {
+        await db.insert(notifications).values(notificationRecords);
+      }
+    } catch (notifyError) {
+      console.error('通知エラー（応募自体は成功）:', notifyError);
     }
 
     return NextResponse.json({
