@@ -13,6 +13,7 @@ import {
   Megaphone,
   HandHeart,
   Briefcase,
+  Sparkles,
   LogOut,
   ChevronRight,
   Plus,
@@ -44,10 +45,17 @@ const navItems: NavItem[] = [
   },
   {
     href: '/dashboard/shifts',
-    label: 'シフト作成',
+    label: 'シフト管理',
     icon: Calendar,
     roles: ['owner', 'manager'],
     description: 'シフトを管理',
+  },
+  {
+    href: '/dashboard/shift-create',
+    label: 'LINE→シフト作成',
+    icon: Sparkles,
+    roles: ['owner', 'manager'],
+    description: 'LINEから自動生成',
   },
   {
     href: '/dashboard/staff',
