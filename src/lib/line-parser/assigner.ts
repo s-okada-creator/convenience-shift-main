@@ -170,9 +170,9 @@ export function autoAssign(
         if (existingForDay.length > 0) {
           // 時間重複チェック（夜勤→早朝の連続勤務を防ぐ）
           const hasOverlap = existingForDay.some(existing => {
-            let exStart = timeToMin(existing.startTime);
+            const exStart = timeToMin(existing.startTime);
             let exEnd = timeToMin(existing.endTime);
-            let slotStart = timeToMin(slot.start);
+            const slotStart = timeToMin(slot.start);
             let slotEnd = timeToMin(slot.end);
             if (exEnd <= exStart) exEnd += 24 * 60;
             if (slotEnd <= slotStart) slotEnd += 24 * 60;
