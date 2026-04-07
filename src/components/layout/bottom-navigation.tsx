@@ -3,7 +3,7 @@
 import { memo, useCallback, useMemo, useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Home, Calendar, CalendarDays, CalendarOff, Users, ClipboardList, Megaphone, HandHeart, Briefcase, Menu, X, LogOut, Plus } from 'lucide-react';
+import { Home, Calendar, Users, ClipboardList, Megaphone, HandHeart, Menu, X, LogOut, Plus } from 'lucide-react';
 import type { SessionUser } from '@/lib/auth';
 
 interface NavItem {
@@ -18,25 +18,19 @@ const primaryNavItems: NavItem[] = [
     href: '/dashboard',
     label: 'ホーム',
     icon: Home,
-    roles: ['owner', 'manager', 'staff'],
+    roles: ['owner', 'manager'],
   },
   {
     href: '/dashboard/shifts',
     label: 'シフト',
     icon: Calendar,
-    roles: ['owner', 'manager', 'staff'],
+    roles: ['owner', 'manager'],
   },
   {
     href: '/dashboard/help-board',
     label: 'ヘルプ',
     icon: Megaphone,
-    roles: ['owner', 'manager', 'staff'],
-  },
-  {
-    href: '/dashboard/my-shifts',
-    label: 'マイシフト',
-    icon: CalendarDays,
-    roles: ['owner', 'manager', 'staff'],
+    roles: ['owner', 'manager'],
   },
 ];
 
@@ -60,12 +54,6 @@ const menuItems: NavItem[] = [
     roles: ['owner', 'manager', 'staff'],
   },
   {
-    href: '/dashboard/shift-board',
-    label: 'シフト求人',
-    icon: Briefcase,
-    roles: ['owner', 'manager', 'staff'],
-  },
-  {
     href: '/dashboard/staff',
     label: 'スタッフ管理',
     icon: Users,
@@ -76,18 +64,6 @@ const menuItems: NavItem[] = [
     label: '必要人数設定',
     icon: ClipboardList,
     roles: ['owner', 'manager'],
-  },
-  {
-    href: '/dashboard/my-shifts',
-    label: 'マイシフト',
-    icon: CalendarDays,
-    roles: ['owner', 'manager', 'staff'],
-  },
-  {
-    href: '/dashboard/time-off',
-    label: '休み希望',
-    icon: CalendarOff,
-    roles: ['owner', 'manager', 'staff'],
   },
 ];
 

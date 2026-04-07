@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useMemo, useRef } from 'react';
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { DashboardLayout, PageSection } from '@/components/layout/dashboard-layout';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -20,10 +20,19 @@ import {
   SkipForward,
   UserPlus,
   Sparkles,
+  Info,
 } from 'lucide-react';
 import type { SessionUser } from '@/lib/auth';
 import { parseLineChat, type ParseResult, type ParsedStaff } from '@/lib/line-parser';
-import { autoAssign, type AssignResult, DEFAULT_TIME_SLOTS } from '@/lib/line-parser/assigner';
+import {
+  autoAssign,
+  dbRequirementsToSlots,
+  type AssignResult,
+  type GapInfo,
+  type TimeSlotDef,
+  type DbRequirement,
+  DEFAULT_TIME_SLOTS,
+} from '@/lib/line-parser/assigner';
 
 type Step = 'input' | 'parsed' | 'assigned' | 'fill-gaps' | 'complete';
 
@@ -36,12 +45,20 @@ const STEPS: { id: Step; label: string }[] = [
 ];
 
 const STEP_ORDER: Step[] = STEPS.map(s => s.id);
-
 const DAY_NAMES = ['日', '月', '火', '水', '木', '金', '土'];
 
 function getDayOfWeek(year: number, month: number, day: number): string {
   const d = new Date(year, month - 1, day);
   return DAY_NAMES[d.getDay()];
+}
+
+function getDow(year: number, month: number, day: number): number {
+  return new Date(year, month - 1, day).getDay();
+}
+
+interface Store {
+  id: number;
+  name: string;
 }
 
 interface ShiftCreateContentProps {
@@ -50,6 +67,14 @@ interface ShiftCreateContentProps {
 
 export function ShiftCreateContent({ user }: ShiftCreateContentProps) {
   const [step, setStep] = useState<Step>('input');
+
+  // 店舗選択
+  const [stores, setStores] = useState<Store[]>([]);
+  const [selectedStoreId, setSelectedStoreId] = useState<string>('');
+
+  // DB必要人数
+  const [dbRequirements, setDbRequirements] = useState<DbRequirement[]>([]);
+  const [requirementsLoaded, setRequirementsLoaded] = useState(false);
 
   // STEP 1: 入力
   const [lineText, setLineText] = useState('');
@@ -68,8 +93,70 @@ export function ShiftCreateContent({ user }: ShiftCreateContentProps) {
   const [manualShifts, setManualShifts] = useState<{ day: number; slotId: string; name: string }[]>([]);
   const [managerName, setManagerName] = useState(user.name);
 
-  // 連打防止
   const isProcessingRef = useRef(false);
+
+  // ========== 店舗・必要人数の取得 ==========
+  useEffect(() => {
+    const fetchStores = async () => {
+      try {
+        const res = await fetch('/api/stores');
+        if (res.ok) {
+          const data: Store[] = await res.json();
+          setStores(data);
+          const defaultStore = user.storeId
+            ? data.find(s => s.id === user.storeId)
+            : data[0];
+          if (defaultStore) setSelectedStoreId(String(defaultStore.id));
+        }
+      } catch { /* ignore */ }
+    };
+    fetchStores();
+  }, [user.storeId]);
+
+  useEffect(() => {
+    if (!selectedStoreId) return;
+    const fetchRequirements = async () => {
+      try {
+        const res = await fetch(`/api/shift-requirements?storeId=${selectedStoreId}`);
+        if (res.ok) {
+          const data = await res.json();
+          setDbRequirements(data.map((r: { dayOfWeek: number; timeSlot: string; requiredCount: number }) => ({
+            dayOfWeek: r.dayOfWeek,
+            timeSlot: r.timeSlot,
+            requiredCount: r.requiredCount,
+          })));
+          setRequirementsLoaded(true);
+        }
+      } catch {
+        setRequirementsLoaded(true); // フォールバックで進められるように
+      }
+    };
+    fetchRequirements();
+  }, [selectedStoreId]);
+
+  // DB設定から曜日別スロットMapを生成
+  const slotsByDow = useMemo((): Map<number, TimeSlotDef[]> | null => {
+    if (dbRequirements.length === 0) return null;
+    const map = new Map<number, TimeSlotDef[]>();
+    for (let dow = 0; dow <= 6; dow++) {
+      const slots = dbRequirementsToSlots(dbRequirements, dow);
+      if (slots.length > 0) {
+        map.set(dow, slots);
+      }
+    }
+    return map.size > 0 ? map : null;
+  }, [dbRequirements]);
+
+  // 表示用のスロット定義（シフト表ヘッダー用）
+  const displaySlots = useMemo((): TimeSlotDef[] => {
+    if (!slotsByDow) return DEFAULT_TIME_SLOTS;
+    // 全曜日の中で最も多いスロット数を持つ曜日を代表として使う
+    let maxSlots: TimeSlotDef[] = DEFAULT_TIME_SLOTS;
+    for (const [, slots] of slotsByDow) {
+      if (slots.length > maxSlots.length) maxSlots = slots;
+    }
+    return maxSlots;
+  }, [slotsByDow]);
 
   // 全ステートリセット
   const resetAll = useCallback(() => {
@@ -84,32 +171,28 @@ export function ShiftCreateContent({ user }: ShiftCreateContentProps) {
   // ========== STEP 1: 解析 ==========
   const handleParse = useCallback(() => {
     if (!lineText.trim()) return;
-
     const result = parseLineChat(
       lineText,
       parseInt(targetMonth),
       targetHalf,
       parseInt(targetYear)
     );
-
     setParseResult(result);
-    // 下流ステートをクリア
     setAssignResult(null);
     setManualShifts([]);
     setCurrentGapIndex(0);
     setStep('parsed');
   }, [lineText, targetMonth, targetHalf, targetYear]);
 
-  // ========== STEP 2 → 3: 自動配置 ==========
+  // ========== STEP 2 → 3: 自動配置（DB必要人数使用） ==========
   const handleAutoAssign = useCallback(() => {
     if (!parseResult) return;
-
-    const result = autoAssign(parseResult);
+    const result = autoAssign(parseResult, slotsByDow || undefined);
     setAssignResult(result);
     setCurrentGapIndex(0);
     setManualShifts([]);
     setStep('assigned');
-  }, [parseResult]);
+  }, [parseResult, slotsByDow]);
 
   // ========== STEP 3 → 4: 社員配置開始 ==========
   const handleStartFillGaps = useCallback(() => {
@@ -118,7 +201,7 @@ export function ShiftCreateContent({ user }: ShiftCreateContentProps) {
     setStep('fill-gaps');
   }, []);
 
-  // ========== STEP 4: 社員配置操作 ==========
+  // ========== STEP 4: 社員配置 ==========
   const currentGap = useMemo(() => {
     if (!assignResult || assignResult.gaps.length === 0) return null;
     if (currentGapIndex >= assignResult.gaps.length) return null;
@@ -137,15 +220,12 @@ export function ShiftCreateContent({ user }: ShiftCreateContentProps) {
   const handleFillGap = useCallback(() => {
     if (!currentGap || isProcessingRef.current) return;
     isProcessingRef.current = true;
-
     setManualShifts(prev => [...prev, {
       day: currentGap.day,
       slotId: currentGap.slotId,
       name: managerName,
     }]);
     advanceGap();
-
-    // 次のレンダーサイクルでロック解除
     requestAnimationFrame(() => { isProcessingRef.current = false; });
   }, [currentGap, managerName, advanceGap]);
 
@@ -162,15 +242,8 @@ export function ShiftCreateContent({ user }: ShiftCreateContentProps) {
     const manualCount = manualShifts.length;
     const totalFilled = assignResult.stats.filledSlots + manualCount;
     const totalSlots = assignResult.stats.totalSlots;
-
-    // 残りギャップ: ギャップごとにmanualShiftsで埋めた分を引く
-    const filledGapKeys = new Set(
-      manualShifts.map(s => `${s.day}-${s.slotId}`)
-    );
-    const remainingGaps = assignResult.gaps.filter(
-      g => !filledGapKeys.has(`${g.day}-${g.slotId}`)
-    ).length;
-
+    const filledGapKeys = new Set(manualShifts.map(s => `${s.day}-${s.slotId}`));
+    const remainingGaps = assignResult.gaps.filter(g => !filledGapKeys.has(`${g.day}-${g.slotId}`)).length;
     return {
       autoFilled: assignResult.stats.filledSlots,
       manualFilled: manualCount,
@@ -184,17 +257,22 @@ export function ShiftCreateContent({ user }: ShiftCreateContentProps) {
   // ========== シフト表データ ==========
   const shiftTableData = useMemo(() => {
     if (!assignResult || !parseResult) return null;
-
     const { period } = parseResult;
     const startDay = period.half === 'first' ? 1 : 16;
     const daysInMonth = new Date(period.year, period.month, 0).getDate();
     const endDay = period.half === 'first' ? 15 : daysInMonth;
-
     const days: number[] = [];
     for (let d = startDay; d <= endDay; d++) days.push(d);
-
     return { days, period };
   }, [assignResult, parseResult]);
+
+  // ========== 日ごとのスロット取得 ==========
+  const getSlotsForDay = useCallback((day: number): TimeSlotDef[] => {
+    if (!parseResult) return displaySlots;
+    const { year, month } = parseResult.period;
+    const dow = getDow(year, month, day);
+    return slotsByDow?.get(dow) || DEFAULT_TIME_SLOTS;
+  }, [parseResult, slotsByDow, displaySlots]);
 
   // ========== レンダリング ==========
   return (
@@ -206,7 +284,21 @@ export function ShiftCreateContent({ user }: ShiftCreateContentProps) {
           LINE → シフト自動作成
         </span>
       }
-      description="LINEトーク履歴を貼り付けて、AIでシフトを自動生成"
+      description="LINEトーク履歴を貼り付けて、シフトを自動生成"
+      actions={
+        stores.length > 1 ? (
+          <Select value={selectedStoreId} onValueChange={setSelectedStoreId}>
+            <SelectTrigger className="w-[180px] border-[#E5E5EA] bg-white">
+              <SelectValue placeholder="店舗を選択" />
+            </SelectTrigger>
+            <SelectContent>
+              {stores.map(s => (
+                <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : undefined
+      }
     >
       {/* ステップインジケーター */}
       <div className="flex items-center gap-2 mb-6 overflow-x-auto pb-2">
@@ -239,33 +331,40 @@ export function ShiftCreateContent({ user }: ShiftCreateContentProps) {
             LINEトーク履歴を貼り付けてください
           </h2>
 
+          {/* DB必要人数の状態表示 */}
+          {requirementsLoaded && (
+            <div className={`rounded-xl p-3 mb-4 flex items-center gap-2 text-sm ${
+              dbRequirements.length > 0
+                ? 'bg-[#34C759]/10 border border-[#34C759]/20 text-[#34C759]'
+                : 'bg-[#FF9500]/10 border border-[#FF9500]/20 text-[#FF9500]'
+            }`}>
+              <Info className="w-4 h-4 flex-shrink-0" />
+              {dbRequirements.length > 0
+                ? `必要人数設定を読み込みました（${stores.find(s => String(s.id) === selectedStoreId)?.name || '店舗'}）`
+                : '必要人数が未設定です。デフォルト値（夜勤1人/早朝3人/日勤2人/夕勤2人）で配置します'
+              }
+            </div>
+          )}
+
           <div className="flex flex-wrap gap-3 mb-4">
             <Select value={targetYear} onValueChange={setTargetYear}>
-              <SelectTrigger className="w-[100px]">
-                <SelectValue />
-              </SelectTrigger>
+              <SelectTrigger className="w-[100px]"><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="2025">2025年</SelectItem>
-                <SelectItem value="2026">2026年</SelectItem>
-                <SelectItem value="2027">2027年</SelectItem>
+                {[2025, 2026, 2027].map(y => (
+                  <SelectItem key={y} value={String(y)}>{y}年</SelectItem>
+                ))}
               </SelectContent>
             </Select>
-
             <Select value={targetMonth} onValueChange={setTargetMonth}>
-              <SelectTrigger className="w-[90px]">
-                <SelectValue />
-              </SelectTrigger>
+              <SelectTrigger className="w-[90px]"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {Array.from({ length: 12 }, (_, i) => (
                   <SelectItem key={i + 1} value={String(i + 1)}>{i + 1}月</SelectItem>
                 ))}
               </SelectContent>
             </Select>
-
             <Select value={targetHalf} onValueChange={(v) => setTargetHalf(v as 'first' | 'second')}>
-              <SelectTrigger className="w-[100px]">
-                <SelectValue />
-              </SelectTrigger>
+              <SelectTrigger className="w-[100px]"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="first">前半</SelectItem>
                 <SelectItem value="second">後半</SelectItem>
@@ -284,13 +383,8 @@ export function ShiftCreateContent({ user }: ShiftCreateContentProps) {
             <p className="text-sm text-[#86868B]">
               {lineText.length > 0 ? `${lineText.length.toLocaleString()}文字` : 'テキストを貼り付けてください'}
             </p>
-            <Button
-              onClick={handleParse}
-              disabled={!lineText.trim()}
-              className="bg-[#007AFF] hover:bg-[#0056CC] text-white rounded-xl px-6"
-            >
-              <Wand2 className="w-4 h-4 mr-2" />
-              解析する
+            <Button onClick={handleParse} disabled={!lineText.trim()} className="bg-[#007AFF] hover:bg-[#0056CC] text-white rounded-xl px-6">
+              <Wand2 className="w-4 h-4 mr-2" />解析する
             </Button>
           </div>
         </PageSection>
@@ -304,17 +398,14 @@ export function ShiftCreateContent({ user }: ShiftCreateContentProps) {
               解析結果: {parseResult.period.year}年{parseResult.period.month}月
               {parseResult.period.half === 'first' ? '前半' : '後半'}
             </h2>
-            <Badge className="bg-[#34C759] text-white">
-              {parseResult.staff.length}名分を検出
-            </Badge>
+            <Badge className="bg-[#34C759] text-white">{parseResult.staff.length}名分を検出</Badge>
           </div>
 
           {parseResult.warnings.length > 0 && (
             <div className="bg-[#FF9500]/10 border border-[#FF9500]/30 rounded-xl p-3 mb-4">
               {parseResult.warnings.map((w, i) => (
                 <p key={i} className="text-sm text-[#FF9500] flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-                  {w}
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0" />{w}
                 </p>
               ))}
             </div>
@@ -322,9 +413,7 @@ export function ShiftCreateContent({ user }: ShiftCreateContentProps) {
 
           {parseResult.staff.length === 0 && (
             <div className="bg-[#FF3B30]/10 border border-[#FF3B30]/30 rounded-xl p-4 mb-4 text-center">
-              <p className="text-sm text-[#FF3B30]">
-                シフト希望が見つかりませんでした。期間の選択が正しいか確認してください。
-              </p>
+              <p className="text-sm text-[#FF3B30]">シフト希望が見つかりませんでした。期間の選択が正しいか確認してください。</p>
             </div>
           )}
 
@@ -335,27 +424,17 @@ export function ShiftCreateContent({ user }: ShiftCreateContentProps) {
           </div>
 
           <div className="flex items-center justify-between mt-6 pt-4 border-t border-[#E5E5EA]">
-            <Button
-              variant="outline"
-              onClick={() => setStep('input')}
-              className="rounded-xl"
-            >
-              <ChevronLeft className="w-4 h-4 mr-1" />
-              戻る
+            <Button variant="outline" onClick={() => setStep('input')} className="rounded-xl">
+              <ChevronLeft className="w-4 h-4 mr-1" />戻る
             </Button>
-            <Button
-              onClick={handleAutoAssign}
-              disabled={parseResult.staff.length === 0}
-              className="bg-[#007AFF] hover:bg-[#0056CC] text-white rounded-xl px-6"
-            >
-              <Sparkles className="w-4 h-4 mr-2" />
-              シフトを自動配置
+            <Button onClick={handleAutoAssign} disabled={parseResult.staff.length === 0} className="bg-[#007AFF] hover:bg-[#0056CC] text-white rounded-xl px-6">
+              <Sparkles className="w-4 h-4 mr-2" />シフトを自動配置
             </Button>
           </div>
         </PageSection>
       )}
 
-      {/* ========== STEP 3+: 自動配置結果 + シフト表 ========== */}
+      {/* ========== STEP 3+: シフト表 ========== */}
       {(step === 'assigned' || step === 'fill-gaps' || step === 'complete') && assignResult && shiftTableData && parseResult && (
         <>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
@@ -365,93 +444,83 @@ export function ShiftCreateContent({ user }: ShiftCreateContentProps) {
             <StatBadge
               label="カバー率"
               value={`${finalStats?.coveragePercent ?? assignResult.stats.coveragePercent}%`}
-              color={
-                (finalStats?.coveragePercent ?? assignResult.stats.coveragePercent) >= 80 ? 'green' :
-                (finalStats?.coveragePercent ?? assignResult.stats.coveragePercent) >= 60 ? 'yellow' : 'red'
-              }
+              color={(finalStats?.coveragePercent ?? assignResult.stats.coveragePercent) >= 80 ? 'green' : (finalStats?.coveragePercent ?? assignResult.stats.coveragePercent) >= 60 ? 'yellow' : 'red'}
             />
           </div>
 
+          {/* 不足枠メッセージ（STEP 3で表示） */}
+          {step === 'assigned' && assignResult.gaps.length > 0 && (
+            <PageSection className="mb-4">
+              <h3 className="text-sm font-bold text-[#FF3B30] mb-3 flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4" />
+                人手が足りない時間帯があります
+              </h3>
+              <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                {assignResult.gaps.map((gap, i) => (
+                  <div key={i} className="flex items-center justify-between bg-[#FF3B30]/5 border border-[#FF3B30]/10 rounded-lg px-3 py-2">
+                    <div className="flex items-center gap-3">
+                      <span className="text-sm font-medium text-[#1D1D1F]">
+                        {parseResult.period.month}/{gap.day}({getDayOfWeek(parseResult.period.year, parseResult.period.month, gap.day)})
+                      </span>
+                      <Badge variant="outline" className="text-xs border-[#FF3B30]/30 text-[#FF3B30]">
+                        {gap.slotLabel} {gap.startTime}-{gap.endTime}
+                      </Badge>
+                    </div>
+                    <span className="text-sm text-[#FF3B30] font-medium">
+                      あと{gap.shortage}人足りません
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </PageSection>
+          )}
+
+          {/* シフト表 */}
           <PageSection className="overflow-x-auto">
             <h2 className="text-lg font-bold text-[#1D1D1F] mb-4">
               シフト表: {parseResult.period.month}月{parseResult.period.half === 'first' ? '前半' : '後半'}
             </h2>
-
             <div className="min-w-[700px]">
-              <div className="grid grid-cols-[80px_repeat(4,1fr)] gap-1 mb-2">
-                <div className="text-xs font-medium text-[#86868B] text-center">日付</div>
-                {DEFAULT_TIME_SLOTS.map(slot => (
-                  <div key={slot.id} className="text-xs font-medium text-[#86868B] text-center">
-                    {slot.label}
-                    <br />
-                    <span className="text-[10px]">{slot.start}-{slot.end}</span>
-                    <br />
-                    <span className="text-[10px]">({slot.required}人)</span>
-                  </div>
-                ))}
-              </div>
-
               {shiftTableData.days.map(day => {
                 const { year, month } = shiftTableData.period;
                 const dow = getDayOfWeek(year, month, day);
                 const isWeekend = dow === '土' || dow === '日';
+                const daySlots = getSlotsForDay(day);
 
                 return (
-                  <div
-                    key={day}
-                    className={`grid grid-cols-[80px_repeat(4,1fr)] gap-1 mb-1 ${
-                      isWeekend ? 'bg-[#F5F5F7]' : ''
-                    } rounded-lg`}
-                  >
+                  <div key={day} className={`grid gap-1 mb-1 rounded-lg ${isWeekend ? 'bg-[#F5F5F7]' : ''}`}
+                    style={{ gridTemplateColumns: `80px repeat(${daySlots.length}, 1fr)` }}>
                     <div className={`text-sm font-medium text-center py-2 rounded-lg ${
-                      dow === '日' ? 'text-[#FF3B30]' :
-                      dow === '土' ? 'text-[#007AFF]' :
-                      'text-[#1D1D1F]'
+                      dow === '日' ? 'text-[#FF3B30]' : dow === '土' ? 'text-[#007AFF]' : 'text-[#1D1D1F]'
                     }`}>
                       {month}/{day}({dow})
                     </div>
-                    {DEFAULT_TIME_SLOTS.map(slot => {
-                      const assigned = assignResult.shifts.filter(
-                        s => s.day === day && s.slotId === slot.id
-                      );
-                      const manual = manualShifts.filter(
-                        s => s.day === day && s.slotId === slot.id
-                      );
-                      const gap = assignResult.gaps.find(
-                        g => g.day === day && g.slotId === slot.id
-                      );
+                    {daySlots.map(slot => {
+                      const assigned = assignResult.shifts.filter(s => s.day === day && s.slotId === slot.id);
+                      const manual = manualShifts.filter(s => s.day === day && s.slotId === slot.id);
+                      const gap = assignResult.gaps.find(g => g.day === day && g.slotId === slot.id);
                       const isCurrentGap = step === 'fill-gaps' && currentGap?.day === day && currentGap?.slotId === slot.id;
-
                       const totalAssigned = assigned.length + manual.length;
                       const isFull = totalAssigned >= slot.required;
 
                       return (
-                        <div
-                          key={slot.id}
-                          className={`text-xs py-2 px-2 rounded-lg min-h-[40px] transition-all ${
-                            isCurrentGap ? 'ring-2 ring-[#007AFF] bg-[#007AFF]/10' :
-                            isFull ? 'bg-[#34C759]/10 border border-[#34C759]/20' :
-                            gap ? 'bg-[#FF3B30]/10 border border-[#FF3B30]/20' :
-                            'bg-[#34C759]/10 border border-[#34C759]/20'
-                          }`}
-                        >
+                        <div key={slot.id} className={`text-xs py-1.5 px-2 rounded-lg min-h-[36px] transition-all ${
+                          isCurrentGap ? 'ring-2 ring-[#007AFF] bg-[#007AFF]/10' :
+                          isFull ? 'bg-[#34C759]/10 border border-[#34C759]/20' :
+                          gap ? 'bg-[#FF3B30]/10 border border-[#FF3B30]/20' :
+                          'bg-[#34C759]/10 border border-[#34C759]/20'
+                        }`}>
+                          <div className="text-[9px] text-[#86868B] mb-0.5">{slot.label} {slot.start}-{slot.end} ({slot.required}人)</div>
                           {assigned.map((s, i) => (
                             <div key={`a-${s.staffName}-${i}`} className="text-[#1D1D1F] truncate">
-                              {s.staffName}
-                              <span className="text-[10px] text-[#86868B] ml-1">
-                                {s.startTime}-{s.endTime}
-                              </span>
+                              {s.staffName} <span className="text-[10px] text-[#86868B]">{s.startTime}-{s.endTime}</span>
                             </div>
                           ))}
                           {manual.map((s, i) => (
-                            <div key={`m-${s.name}-${i}`} className="text-[#007AFF] font-medium truncate">
-                              {s.name} (社員)
-                            </div>
+                            <div key={`m-${s.name}-${i}`} className="text-[#007AFF] font-medium truncate">{s.name} (社員)</div>
                           ))}
                           {gap && !isFull && (
-                            <div className="text-[#FF3B30] text-[10px] mt-0.5">
-                              -{gap.shortage}人不足
-                            </div>
+                            <div className="text-[#FF3B30] text-[10px]">-{gap.shortage}人不足</div>
                           )}
                         </div>
                       );
@@ -464,29 +533,16 @@ export function ShiftCreateContent({ user }: ShiftCreateContentProps) {
 
           {step === 'assigned' && (
             <div className="flex items-center justify-between mt-4">
-              <Button
-                variant="outline"
-                onClick={() => setStep('parsed')}
-                className="rounded-xl"
-              >
-                <ChevronLeft className="w-4 h-4 mr-1" />
-                戻る
+              <Button variant="outline" onClick={() => setStep('parsed')} className="rounded-xl">
+                <ChevronLeft className="w-4 h-4 mr-1" />戻る
               </Button>
               {assignResult.gaps.length > 0 ? (
-                <Button
-                  onClick={handleStartFillGaps}
-                  className="bg-[#FF9500] hover:bg-[#E68600] text-white rounded-xl px-6"
-                >
-                  <UserPlus className="w-4 h-4 mr-2" />
-                  社員を配置する（{assignResult.gaps.length}枠）
+                <Button onClick={handleStartFillGaps} className="bg-[#FF9500] hover:bg-[#E68600] text-white rounded-xl px-6">
+                  <UserPlus className="w-4 h-4 mr-2" />社員を配置する（{assignResult.gaps.length}枠）
                 </Button>
               ) : (
-                <Button
-                  onClick={() => setStep('complete')}
-                  className="bg-[#34C759] hover:bg-[#2DB84E] text-white rounded-xl px-6"
-                >
-                  <CheckCircle2 className="w-4 h-4 mr-2" />
-                  完了
+                <Button onClick={() => setStep('complete')} className="bg-[#34C759] hover:bg-[#2DB84E] text-white rounded-xl px-6">
+                  <CheckCircle2 className="w-4 h-4 mr-2" />完了
                 </Button>
               )}
             </div>
@@ -499,12 +555,9 @@ export function ShiftCreateContent({ user }: ShiftCreateContentProps) {
         <PageSection className="mt-4">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-bold text-[#1D1D1F] flex items-center gap-2">
-              <UserPlus className="w-5 h-5 text-[#FF9500]" />
-              社員配置
+              <UserPlus className="w-5 h-5 text-[#FF9500]" />社員配置
             </h2>
-            <Badge variant="outline" className="text-sm">
-              {currentGapIndex + 1} / {assignResult.gaps.length}
-            </Badge>
+            <Badge variant="outline" className="text-sm">{currentGapIndex + 1} / {assignResult.gaps.length}</Badge>
           </div>
 
           <div className="bg-[#FF9500]/10 border border-[#FF9500]/30 rounded-2xl p-6 text-center">
@@ -513,49 +566,29 @@ export function ShiftCreateContent({ user }: ShiftCreateContentProps) {
               ({getDayOfWeek(parseResult.period.year, parseResult.period.month, currentGap.day)})
               &nbsp;{currentGap.slotLabel}
             </p>
-            <p className="text-lg text-[#86868B] mb-1">
-              {currentGap.startTime} 〜 {currentGap.endTime}
-            </p>
-            <p className="text-[#FF3B30] font-medium">
-              あと{currentGap.shortage}人足りません
-            </p>
+            <p className="text-lg text-[#86868B] mb-1">{currentGap.startTime} 〜 {currentGap.endTime}</p>
+            <p className="text-[#FF3B30] font-medium">あと{currentGap.shortage}人足りません</p>
           </div>
 
           <div className="mt-4 mb-4">
             <label className="text-sm text-[#86868B] mb-1 block">配置する社員名</label>
-            <input
-              type="text"
-              value={managerName}
-              onChange={(e) => setManagerName(e.target.value)}
-              className="w-full px-4 py-2 border border-[#E5E5EA] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#007AFF]"
-            />
+            <input type="text" value={managerName} onChange={(e) => setManagerName(e.target.value)}
+              className="w-full px-4 py-2 border border-[#E5E5EA] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#007AFF]" />
           </div>
 
           <div className="flex gap-3">
-            <Button
-              onClick={handleFillGap}
-              disabled={!managerName.trim()}
-              className="flex-1 bg-[#007AFF] hover:bg-[#0056CC] text-white rounded-xl h-14 text-base"
-            >
-              <UserPlus className="w-5 h-5 mr-2" />
-              自分を入れる
+            <Button onClick={handleFillGap} disabled={!managerName.trim()} className="flex-1 bg-[#007AFF] hover:bg-[#0056CC] text-white rounded-xl h-14 text-base">
+              <UserPlus className="w-5 h-5 mr-2" />自分を入れる
             </Button>
-            <Button
-              onClick={handleSkipGap}
-              variant="outline"
-              className="flex-1 rounded-xl h-14 text-base border-[#E5E5EA]"
-            >
-              <SkipForward className="w-5 h-5 mr-2" />
-              スキップ
+            <Button onClick={handleSkipGap} variant="outline" className="flex-1 rounded-xl h-14 text-base border-[#E5E5EA]">
+              <SkipForward className="w-5 h-5 mr-2" />スキップ
             </Button>
           </div>
 
           <div className="mt-4">
             <div className="w-full bg-[#E5E5EA] rounded-full h-2">
-              <div
-                className="bg-[#007AFF] rounded-full h-2 transition-all duration-300"
-                style={{ width: `${((currentGapIndex + 1) / assignResult.gaps.length) * 100}%` }}
-              />
+              <div className="bg-[#007AFF] rounded-full h-2 transition-all duration-300"
+                style={{ width: `${((currentGapIndex + 1) / assignResult.gaps.length) * 100}%` }} />
             </div>
           </div>
         </PageSection>
@@ -566,40 +599,20 @@ export function ShiftCreateContent({ user }: ShiftCreateContentProps) {
         <PageSection className="mt-4">
           <div className="text-center py-8">
             <CheckCircle2 className="w-16 h-16 text-[#34C759] mx-auto mb-4" />
-            <h2 className="text-2xl font-bold text-[#1D1D1F] mb-2">
-              シフト作成完了
-            </h2>
+            <h2 className="text-2xl font-bold text-[#1D1D1F] mb-2">シフト作成完了</h2>
             <p className="text-[#86868B] mb-6">
-              カバー率: {finalStats.coveragePercent}%
-              （自動{finalStats.autoFilled}枠 + 社員{finalStats.manualFilled}枠）
+              カバー率: {finalStats.coveragePercent}%（自動{finalStats.autoFilled}枠 + 社員{finalStats.manualFilled}枠）
             </p>
-
             {finalStats.remainingGaps > 0 && (
               <div className="bg-[#FF9500]/10 border border-[#FF9500]/30 rounded-xl p-4 mb-6 max-w-md mx-auto">
                 <p className="text-sm text-[#FF9500]">
-                  <AlertTriangle className="w-4 h-4 inline mr-1" />
-                  残り{finalStats.remainingGaps}枠が未配置です。ヘルプ募集で対応してください。
+                  <AlertTriangle className="w-4 h-4 inline mr-1" />残り{finalStats.remainingGaps}枠が未配置です。ヘルプ募集で対応してください。
                 </p>
               </div>
             )}
-
             <div className="flex gap-3 justify-center">
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setStep('assigned');
-                  setCurrentGapIndex(0);
-                }}
-                className="rounded-xl"
-              >
-                シフト表を確認
-              </Button>
-              <Button
-                onClick={resetAll}
-                className="bg-[#007AFF] hover:bg-[#0056CC] text-white rounded-xl"
-              >
-                新しいシフトを作成
-              </Button>
+              <Button variant="outline" onClick={() => { setStep('assigned'); setCurrentGapIndex(0); }} className="rounded-xl">シフト表を確認</Button>
+              <Button onClick={resetAll} className="bg-[#007AFF] hover:bg-[#0056CC] text-white rounded-xl">新しいシフトを作成</Button>
             </div>
           </div>
         </PageSection>
@@ -613,7 +626,6 @@ export function ShiftCreateContent({ user }: ShiftCreateContentProps) {
 function StaffParseCard({ staff, period }: { staff: ParsedStaff; period: ParseResult['period'] }) {
   const availableDays = staff.entries.filter(e => e.available).length;
   const totalDays = staff.entries.length;
-
   return (
     <div className="border border-[#E5E5EA] rounded-xl p-3">
       <div className="flex items-center justify-between mb-2">
@@ -623,42 +635,26 @@ function StaffParseCard({ staff, period }: { staff: ParsedStaff; period: ParseRe
           </div>
           <div>
             <p className="text-sm font-medium text-[#1D1D1F]">{staff.name}</p>
-            {staff.lineName !== staff.name && (
-              <p className="text-[10px] text-[#86868B]">LINE: {staff.lineName}</p>
-            )}
+            {staff.lineName !== staff.name && <p className="text-[10px] text-[#86868B]">LINE: {staff.lineName}</p>}
           </div>
         </div>
         <div className="flex items-center gap-2">
           {staff.constraints && (
-            <Badge variant="outline" className="text-[10px] border-[#FF9500]/30 text-[#FF9500]">
-              {staff.constraints[0]}
-            </Badge>
+            <Badge variant="outline" className="text-[10px] border-[#FF9500]/30 text-[#FF9500]">{staff.constraints[0]}</Badge>
           )}
-          <Badge variant="outline" className={`text-xs ${
-            availableDays > 0 ? 'border-[#34C759]/30 text-[#34C759]' : 'border-[#FF3B30]/30 text-[#FF3B30]'
-          }`}>
+          <Badge variant="outline" className={`text-xs ${availableDays > 0 ? 'border-[#34C759]/30 text-[#34C759]' : 'border-[#FF3B30]/30 text-[#FF3B30]'}`}>
             {availableDays}/{totalDays}日可
           </Badge>
         </div>
       </div>
-
       <div className="flex flex-wrap gap-1">
         {staff.entries.map((entry) => {
           const dow = getDayOfWeek(period.year, period.month, entry.day);
           return (
-            <div
-              key={entry.day}
-              className={`text-[10px] px-1.5 py-0.5 rounded ${
-                !entry.available
-                  ? 'bg-[#FF3B30]/10 text-[#FF3B30]'
-                  : 'bg-[#34C759]/10 text-[#34C759]'
-              }`}
-              title={entry.startTime ? `${entry.startTime}-${entry.endTime}` : entry.available ? '可' : '不可'}
-            >
-              {entry.day}({dow})
-              {entry.available && entry.startTime && (
-                <span className="ml-0.5">{entry.startTime.slice(0, 5)}</span>
-              )}
+            <div key={entry.day} className={`text-[10px] px-1.5 py-0.5 rounded ${
+              !entry.available ? 'bg-[#FF3B30]/10 text-[#FF3B30]' : 'bg-[#34C759]/10 text-[#34C759]'
+            }`} title={entry.startTime ? `${entry.startTime}-${entry.endTime}` : entry.available ? '可' : '不可'}>
+              {entry.day}({dow}){entry.available && entry.startTime && <span className="ml-0.5">{entry.startTime.slice(0, 5)}</span>}
             </div>
           );
         })}
@@ -674,7 +670,6 @@ function StatBadge({ label, value, color }: { label: string; value: string; colo
     red: 'bg-[#FF3B30]/10 text-[#FF3B30] border-[#FF3B30]/20',
     yellow: 'bg-[#FF9500]/10 text-[#FF9500] border-[#FF9500]/20',
   };
-
   return (
     <div className={`rounded-xl border p-3 text-center ${colors[color]}`}>
       <p className="text-lg font-bold">{value}</p>
