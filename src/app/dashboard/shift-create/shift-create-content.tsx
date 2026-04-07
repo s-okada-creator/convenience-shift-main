@@ -17,10 +17,12 @@ import {
   AlertTriangle,
   ChevronRight,
   ChevronLeft,
-  SkipForward,
+  ChevronDown,
   UserPlus,
   Sparkles,
   Info,
+  MessageCircle,
+  Clock,
 } from 'lucide-react';
 import type { SessionUser } from '@/lib/auth';
 import { parseLineChat, type ParseResult, type ParsedStaff } from '@/lib/line-parser';
@@ -34,209 +36,138 @@ import {
   DEFAULT_TIME_SLOTS,
 } from '@/lib/line-parser/assigner';
 
-type Step = 'input' | 'parsed' | 'assigned' | 'fill-gaps' | 'complete';
+type Step = 'input' | 'parsed' | 'assigned' | 'complete';
 
 const STEPS: { id: Step; label: string }[] = [
   { id: 'input', label: '1. 貼り付け' },
   { id: 'parsed', label: '2. 解析結果' },
-  { id: 'assigned', label: '3. 自動配置' },
-  { id: 'fill-gaps', label: '4. 社員配置' },
-  { id: 'complete', label: '5. 完成' },
+  { id: 'assigned', label: '3. シフト確認・社員配置' },
+  { id: 'complete', label: '4. 完成' },
 ];
 
 const STEP_ORDER: Step[] = STEPS.map(s => s.id);
 const DAY_NAMES = ['日', '月', '火', '水', '木', '金', '土'];
 
 function getDayOfWeek(year: number, month: number, day: number): string {
-  const d = new Date(year, month - 1, day);
-  return DAY_NAMES[d.getDay()];
+  return DAY_NAMES[new Date(year, month - 1, day).getDay()];
 }
 
 function getDow(year: number, month: number, day: number): number {
   return new Date(year, month - 1, day).getDay();
 }
 
-interface Store {
-  id: number;
-  name: string;
-}
+interface Store { id: number; name: string; }
 
-interface ShiftCreateContentProps {
-  user: SessionUser;
-}
-
-export function ShiftCreateContent({ user }: ShiftCreateContentProps) {
+export function ShiftCreateContent({ user }: { user: SessionUser }) {
   const [step, setStep] = useState<Step>('input');
 
-  // 店舗選択
+  // 店舗・DB必要人数
   const [stores, setStores] = useState<Store[]>([]);
-  const [selectedStoreId, setSelectedStoreId] = useState<string>('');
-
-  // DB必要人数
+  const [selectedStoreId, setSelectedStoreId] = useState('');
   const [dbRequirements, setDbRequirements] = useState<DbRequirement[]>([]);
   const [requirementsLoaded, setRequirementsLoaded] = useState(false);
 
-  // STEP 1: 入力
+  // STEP 1
   const [lineText, setLineText] = useState('');
   const [targetMonth, setTargetMonth] = useState(String(new Date().getMonth() + 1));
   const [targetHalf, setTargetHalf] = useState<'first' | 'second'>('first');
   const [targetYear, setTargetYear] = useState(String(new Date().getFullYear()));
 
-  // STEP 2: 解析結果
+  // STEP 2
   const [parseResult, setParseResult] = useState<ParseResult | null>(null);
 
-  // STEP 3: 自動配置結果
+  // STEP 3
   const [assignResult, setAssignResult] = useState<AssignResult | null>(null);
-
-  // STEP 4: 社員配置
-  const [currentGapIndex, setCurrentGapIndex] = useState(0);
-  const [manualShifts, setManualShifts] = useState<{ day: number; slotId: string; name: string }[]>([]);
+  const [manualShifts, setManualShifts] = useState<{ day: number; slotId: string; slotLabel: string; startTime: string; endTime: string; name: string }[]>([]);
   const [managerName, setManagerName] = useState(user.name);
+  // 日ごとの「自分を入れる」ドロップダウン開閉
+  const [openAddDay, setOpenAddDay] = useState<number | null>(null);
 
-  const isProcessingRef = useRef(false);
-
-  // ========== 店舗・必要人数の取得 ==========
+  // --- データ取得 ---
   useEffect(() => {
-    const fetchStores = async () => {
+    (async () => {
       try {
         const res = await fetch('/api/stores');
         if (res.ok) {
           const data: Store[] = await res.json();
           setStores(data);
-          const defaultStore = user.storeId
-            ? data.find(s => s.id === user.storeId)
-            : data[0];
-          if (defaultStore) setSelectedStoreId(String(defaultStore.id));
+          const def = user.storeId ? data.find(s => s.id === user.storeId) : data[0];
+          if (def) setSelectedStoreId(String(def.id));
         }
       } catch { /* ignore */ }
-    };
-    fetchStores();
+    })();
   }, [user.storeId]);
 
   useEffect(() => {
     if (!selectedStoreId) return;
-    const fetchRequirements = async () => {
+    (async () => {
       try {
         const res = await fetch(`/api/shift-requirements?storeId=${selectedStoreId}`);
         if (res.ok) {
           const data = await res.json();
           setDbRequirements(data.map((r: { dayOfWeek: number; timeSlot: string; requiredCount: number }) => ({
-            dayOfWeek: r.dayOfWeek,
-            timeSlot: r.timeSlot,
-            requiredCount: r.requiredCount,
+            dayOfWeek: r.dayOfWeek, timeSlot: r.timeSlot, requiredCount: r.requiredCount,
           })));
-          setRequirementsLoaded(true);
         }
-      } catch {
-        setRequirementsLoaded(true); // フォールバックで進められるように
-      }
-    };
-    fetchRequirements();
+      } catch { /* ignore */ }
+      finally { setRequirementsLoaded(true); }
+    })();
   }, [selectedStoreId]);
 
-  // DB設定から曜日別スロットMapを生成
   const slotsByDow = useMemo((): Map<number, TimeSlotDef[]> | null => {
     if (dbRequirements.length === 0) return null;
     const map = new Map<number, TimeSlotDef[]>();
     for (let dow = 0; dow <= 6; dow++) {
       const slots = dbRequirementsToSlots(dbRequirements, dow);
-      if (slots.length > 0) {
-        map.set(dow, slots);
-      }
+      if (slots.length > 0) map.set(dow, slots);
     }
     return map.size > 0 ? map : null;
   }, [dbRequirements]);
 
-  // 表示用のスロット定義（シフト表ヘッダー用）
-  const displaySlots = useMemo((): TimeSlotDef[] => {
-    if (!slotsByDow) return DEFAULT_TIME_SLOTS;
-    // 全曜日の中で最も多いスロット数を持つ曜日を代表として使う
-    let maxSlots: TimeSlotDef[] = DEFAULT_TIME_SLOTS;
-    for (const [, slots] of slotsByDow) {
-      if (slots.length > maxSlots.length) maxSlots = slots;
-    }
-    return maxSlots;
-  }, [slotsByDow]);
-
-  // 全ステートリセット
   const resetAll = useCallback(() => {
     setStep('input');
     setLineText('');
     setParseResult(null);
     setAssignResult(null);
     setManualShifts([]);
-    setCurrentGapIndex(0);
+    setOpenAddDay(null);
   }, []);
 
-  // ========== STEP 1: 解析 ==========
+  // --- STEP 1 ---
   const handleParse = useCallback(() => {
     if (!lineText.trim()) return;
-    const result = parseLineChat(
-      lineText,
-      parseInt(targetMonth),
-      targetHalf,
-      parseInt(targetYear)
-    );
+    const result = parseLineChat(lineText, parseInt(targetMonth), targetHalf, parseInt(targetYear));
     setParseResult(result);
     setAssignResult(null);
     setManualShifts([]);
-    setCurrentGapIndex(0);
     setStep('parsed');
   }, [lineText, targetMonth, targetHalf, targetYear]);
 
-  // ========== STEP 2 → 3: 自動配置（DB必要人数使用） ==========
+  // --- STEP 2 → 3 ---
   const handleAutoAssign = useCallback(() => {
     if (!parseResult) return;
     const result = autoAssign(parseResult, slotsByDow || undefined);
     setAssignResult(result);
-    setCurrentGapIndex(0);
     setManualShifts([]);
+    setOpenAddDay(null);
     setStep('assigned');
   }, [parseResult, slotsByDow]);
 
-  // ========== STEP 3 → 4: 社員配置開始 ==========
-  const handleStartFillGaps = useCallback(() => {
-    setCurrentGapIndex(0);
-    setManualShifts([]);
-    setStep('fill-gaps');
-  }, []);
-
-  // ========== STEP 4: 社員配置 ==========
-  const currentGap = useMemo(() => {
-    if (!assignResult || assignResult.gaps.length === 0) return null;
-    if (currentGapIndex >= assignResult.gaps.length) return null;
-    return assignResult.gaps[currentGapIndex];
-  }, [assignResult, currentGapIndex]);
-
-  const advanceGap = useCallback(() => {
-    if (!assignResult) return;
-    if (currentGapIndex < assignResult.gaps.length - 1) {
-      setCurrentGapIndex(prev => prev + 1);
-    } else {
-      setStep('complete');
-    }
-  }, [assignResult, currentGapIndex]);
-
-  const handleFillGap = useCallback(() => {
-    if (!currentGap || isProcessingRef.current) return;
-    isProcessingRef.current = true;
+  // --- STEP 3: 社員追加 ---
+  const handleAddManager = useCallback((day: number, gap: GapInfo) => {
+    if (!managerName.trim()) return;
     setManualShifts(prev => [...prev, {
-      day: currentGap.day,
-      slotId: currentGap.slotId,
+      day,
+      slotId: gap.slotId,
+      slotLabel: gap.slotLabel,
+      startTime: gap.startTime,
+      endTime: gap.endTime,
       name: managerName,
     }]);
-    advanceGap();
-    requestAnimationFrame(() => { isProcessingRef.current = false; });
-  }, [currentGap, managerName, advanceGap]);
+    setOpenAddDay(null);
+  }, [managerName]);
 
-  const handleSkipGap = useCallback(() => {
-    if (isProcessingRef.current) return;
-    isProcessingRef.current = true;
-    advanceGap();
-    requestAnimationFrame(() => { isProcessingRef.current = false; });
-  }, [advanceGap]);
-
-  // ========== 集計 ==========
+  // --- 集計 ---
   const finalStats = useMemo(() => {
     if (!assignResult) return null;
     const manualCount = manualShifts.length;
@@ -244,63 +175,35 @@ export function ShiftCreateContent({ user }: ShiftCreateContentProps) {
     const totalSlots = assignResult.stats.totalSlots;
     const filledGapKeys = new Set(manualShifts.map(s => `${s.day}-${s.slotId}`));
     const remainingGaps = assignResult.gaps.filter(g => !filledGapKeys.has(`${g.day}-${g.slotId}`)).length;
-    return {
-      autoFilled: assignResult.stats.filledSlots,
-      manualFilled: manualCount,
-      totalFilled,
-      totalSlots,
-      coveragePercent: totalSlots > 0 ? Math.round((totalFilled / totalSlots) * 100) : 0,
-      remainingGaps,
-    };
+    return { autoFilled: assignResult.stats.filledSlots, manualFilled: manualCount, totalFilled, totalSlots,
+      coveragePercent: totalSlots > 0 ? Math.round((totalFilled / totalSlots) * 100) : 0, remainingGaps };
   }, [assignResult, manualShifts]);
 
-  // ========== シフト表データ ==========
-  const shiftTableData = useMemo(() => {
-    if (!assignResult || !parseResult) return null;
+  const shiftTableDays = useMemo(() => {
+    if (!assignResult || !parseResult) return [];
     const { period } = parseResult;
     const startDay = period.half === 'first' ? 1 : 16;
     const daysInMonth = new Date(period.year, period.month, 0).getDate();
     const endDay = period.half === 'first' ? 15 : daysInMonth;
     const days: number[] = [];
     for (let d = startDay; d <= endDay; d++) days.push(d);
-    return { days, period };
+    return days;
   }, [assignResult, parseResult]);
 
-  // ========== 日ごとのスロット取得 ==========
-  const getSlotsForDay = useCallback((day: number): TimeSlotDef[] => {
-    if (!parseResult) return displaySlots;
-    const { year, month } = parseResult.period;
-    const dow = getDow(year, month, day);
-    return slotsByDow?.get(dow) || DEFAULT_TIME_SLOTS;
-  }, [parseResult, slotsByDow, displaySlots]);
-
-  // ========== レンダリング ==========
+  // --- レンダリング ---
   return (
     <DashboardLayout
       user={user}
-      title={
-        <span className="flex items-center gap-2">
-          <Sparkles className="w-7 h-7 text-[#007AFF]" />
-          LINE → シフト自動作成
-        </span>
-      }
+      title={<span className="flex items-center gap-2"><Sparkles className="w-7 h-7 text-[#007AFF]" />LINE → シフト自動作成</span>}
       description="LINEトーク履歴を貼り付けて、シフトを自動生成"
-      actions={
-        stores.length > 1 ? (
-          <Select value={selectedStoreId} onValueChange={setSelectedStoreId}>
-            <SelectTrigger className="w-[180px] border-[#E5E5EA] bg-white">
-              <SelectValue placeholder="店舗を選択" />
-            </SelectTrigger>
-            <SelectContent>
-              {stores.map(s => (
-                <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        ) : undefined
-      }
+      actions={stores.length > 1 ? (
+        <Select value={selectedStoreId} onValueChange={setSelectedStoreId}>
+          <SelectTrigger className="w-[180px] border-[#E5E5EA] bg-white"><SelectValue placeholder="店舗を選択" /></SelectTrigger>
+          <SelectContent>{stores.map(s => <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>)}</SelectContent>
+        </Select>
+      ) : undefined}
     >
-      {/* ステップインジケーター */}
+      {/* ステップ */}
       <div className="flex items-center gap-2 mb-6 overflow-x-auto pb-2">
         {STEPS.map((s, i) => {
           const isActive = s.id === step;
@@ -308,62 +211,40 @@ export function ShiftCreateContent({ user }: ShiftCreateContentProps) {
           return (
             <div key={s.id} className="flex items-center gap-2 flex-shrink-0">
               {i > 0 && <ChevronRight className="w-4 h-4 text-[#D2D2D7]" />}
-              <Badge
-                variant={isActive ? 'default' : 'outline'}
-                className={`text-xs whitespace-nowrap ${
-                  isActive ? 'bg-[#007AFF] text-white' :
-                  isPast ? 'bg-[#34C759]/10 text-[#34C759] border-[#34C759]/30' :
-                  'text-[#86868B] border-[#E5E5EA]'
-                }`}
-              >
-                {isPast && !isActive ? <CheckCircle2 className="w-3 h-3 mr-1" /> : null}
-                {s.label}
+              <Badge variant={isActive ? 'default' : 'outline'} className={`text-xs whitespace-nowrap ${
+                isActive ? 'bg-[#007AFF] text-white' : isPast ? 'bg-[#34C759]/10 text-[#34C759] border-[#34C759]/30' : 'text-[#86868B] border-[#E5E5EA]'
+              }`}>
+                {isPast && !isActive ? <CheckCircle2 className="w-3 h-3 mr-1" /> : null}{s.label}
               </Badge>
             </div>
           );
         })}
       </div>
 
-      {/* ========== STEP 1: 入力 ========== */}
+      {/* ===== STEP 1 ===== */}
       {step === 'input' && (
         <PageSection>
-          <h2 className="text-lg font-bold text-[#1D1D1F] mb-4">
-            LINEトーク履歴を貼り付けてください
-          </h2>
-
-          {/* DB必要人数の状態表示 */}
+          <h2 className="text-lg font-bold text-[#1D1D1F] mb-4">LINEトーク履歴を貼り付けてください</h2>
           {requirementsLoaded && (
             <div className={`rounded-xl p-3 mb-4 flex items-center gap-2 text-sm ${
-              dbRequirements.length > 0
-                ? 'bg-[#34C759]/10 border border-[#34C759]/20 text-[#34C759]'
-                : 'bg-[#FF9500]/10 border border-[#FF9500]/20 text-[#FF9500]'
+              dbRequirements.length > 0 ? 'bg-[#34C759]/10 border border-[#34C759]/20 text-[#34C759]' : 'bg-[#FF9500]/10 border border-[#FF9500]/20 text-[#FF9500]'
             }`}>
               <Info className="w-4 h-4 flex-shrink-0" />
               {dbRequirements.length > 0
                 ? `必要人数設定を読み込みました（${stores.find(s => String(s.id) === selectedStoreId)?.name || '店舗'}）`
-                : '必要人数が未設定です。デフォルト値（夜勤1人/早朝3人/日勤2人/夕勤2人）で配置します'
-              }
+                : '必要人数が未設定です。デフォルト値で配置します'}
             </div>
           )}
-
           <div className="flex flex-wrap gap-3 mb-4">
             <Select value={targetYear} onValueChange={setTargetYear}>
               <SelectTrigger className="w-[100px]"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {[2025, 2026, 2027].map(y => (
-                  <SelectItem key={y} value={String(y)}>{y}年</SelectItem>
-                ))}
-              </SelectContent>
+              <SelectContent>{[2025, 2026, 2027].map(y => <SelectItem key={y} value={String(y)}>{y}年</SelectItem>)}</SelectContent>
             </Select>
             <Select value={targetMonth} onValueChange={setTargetMonth}>
               <SelectTrigger className="w-[90px]"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {Array.from({ length: 12 }, (_, i) => (
-                  <SelectItem key={i + 1} value={String(i + 1)}>{i + 1}月</SelectItem>
-                ))}
-              </SelectContent>
+              <SelectContent>{Array.from({ length: 12 }, (_, i) => <SelectItem key={i + 1} value={String(i + 1)}>{i + 1}月</SelectItem>)}</SelectContent>
             </Select>
-            <Select value={targetHalf} onValueChange={(v) => setTargetHalf(v as 'first' | 'second')}>
+            <Select value={targetHalf} onValueChange={v => setTargetHalf(v as 'first' | 'second')}>
               <SelectTrigger className="w-[100px]"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="first">前半</SelectItem>
@@ -371,18 +252,11 @@ export function ShiftCreateContent({ user }: ShiftCreateContentProps) {
               </SelectContent>
             </Select>
           </div>
-
-          <textarea
-            value={lineText}
-            onChange={(e) => setLineText(e.target.value)}
+          <textarea value={lineText} onChange={e => setLineText(e.target.value)}
             placeholder={'LINEのトーク履歴をここに貼り付けてください...\n\n例:\n【名前】温水直也\n1（水）×\n2（木）9-17\n...'}
-            className="w-full h-64 sm:h-80 p-4 border border-[#E5E5EA] rounded-xl resize-y font-mono text-sm focus:outline-none focus:ring-2 focus:ring-[#007AFF] focus:border-transparent"
-          />
-
+            className="w-full h-64 sm:h-80 p-4 border border-[#E5E5EA] rounded-xl resize-y font-mono text-sm focus:outline-none focus:ring-2 focus:ring-[#007AFF] focus:border-transparent" />
           <div className="flex items-center justify-between mt-4">
-            <p className="text-sm text-[#86868B]">
-              {lineText.length > 0 ? `${lineText.length.toLocaleString()}文字` : 'テキストを貼り付けてください'}
-            </p>
+            <p className="text-sm text-[#86868B]">{lineText.length > 0 ? `${lineText.length.toLocaleString()}文字` : 'テキストを貼り付けてください'}</p>
             <Button onClick={handleParse} disabled={!lineText.trim()} className="bg-[#007AFF] hover:bg-[#0056CC] text-white rounded-xl px-6">
               <Wand2 className="w-4 h-4 mr-2" />解析する
             </Button>
@@ -390,39 +264,30 @@ export function ShiftCreateContent({ user }: ShiftCreateContentProps) {
         </PageSection>
       )}
 
-      {/* ========== STEP 2: 解析結果 ========== */}
+      {/* ===== STEP 2 ===== */}
       {step === 'parsed' && parseResult && (
         <PageSection>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-bold text-[#1D1D1F]">
-              解析結果: {parseResult.period.year}年{parseResult.period.month}月
-              {parseResult.period.half === 'first' ? '前半' : '後半'}
+              解析結果: {parseResult.period.year}年{parseResult.period.month}月{parseResult.period.half === 'first' ? '前半' : '後半'}
             </h2>
             <Badge className="bg-[#34C759] text-white">{parseResult.staff.length}名分を検出</Badge>
           </div>
-
           {parseResult.warnings.length > 0 && (
             <div className="bg-[#FF9500]/10 border border-[#FF9500]/30 rounded-xl p-3 mb-4">
               {parseResult.warnings.map((w, i) => (
-                <p key={i} className="text-sm text-[#FF9500] flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4 flex-shrink-0" />{w}
-                </p>
+                <p key={i} className="text-sm text-[#FF9500] flex items-center gap-2"><AlertTriangle className="w-4 h-4 flex-shrink-0" />{w}</p>
               ))}
             </div>
           )}
-
           {parseResult.staff.length === 0 && (
             <div className="bg-[#FF3B30]/10 border border-[#FF3B30]/30 rounded-xl p-4 mb-4 text-center">
-              <p className="text-sm text-[#FF3B30]">シフト希望が見つかりませんでした。期間の選択が正しいか確認してください。</p>
+              <p className="text-sm text-[#FF3B30]">シフト希望が見つかりませんでした。</p>
             </div>
           )}
-
           <div className="space-y-3 max-h-[500px] overflow-y-auto">
-            {parseResult.staff.map((s) => (
-              <StaffParseCard key={s.name} staff={s} period={parseResult.period} />
-            ))}
+            {parseResult.staff.map(s => <StaffParseCard key={s.name} staff={s} period={parseResult.period} />)}
           </div>
-
           <div className="flex items-center justify-between mt-6 pt-4 border-t border-[#E5E5EA]">
             <Button variant="outline" onClick={() => setStep('input')} className="rounded-xl">
               <ChevronLeft className="w-4 h-4 mr-1" />戻る
@@ -434,184 +299,185 @@ export function ShiftCreateContent({ user }: ShiftCreateContentProps) {
         </PageSection>
       )}
 
-      {/* ========== STEP 3+: シフト表 ========== */}
-      {(step === 'assigned' || step === 'fill-gaps' || step === 'complete') && assignResult && shiftTableData && parseResult && (
+      {/* ===== STEP 3: 日別カード形式 ===== */}
+      {(step === 'assigned' || step === 'complete') && assignResult && parseResult && (
         <>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
-            <StatBadge label="自動配置" value={`${assignResult.stats.filledSlots}枠`} color="blue" />
-            <StatBadge label="不足枠" value={`${assignResult.gaps.length}枠`} color={assignResult.gaps.length > 0 ? 'red' : 'green'} />
+          {/* サマリー */}
+          <div className="grid grid-cols-3 gap-3 mb-4">
+            <StatBadge label="バイト配置" value={`${assignResult.stats.filledSlots}枠`} color="blue" />
             <StatBadge label="社員配置" value={`${manualShifts.length}枠`} color="green" />
             <StatBadge
               label="カバー率"
               value={`${finalStats?.coveragePercent ?? assignResult.stats.coveragePercent}%`}
-              color={(finalStats?.coveragePercent ?? assignResult.stats.coveragePercent) >= 80 ? 'green' : (finalStats?.coveragePercent ?? assignResult.stats.coveragePercent) >= 60 ? 'yellow' : 'red'}
+              color={(finalStats?.coveragePercent ?? assignResult.stats.coveragePercent) >= 70 ? 'green' : (finalStats?.coveragePercent ?? assignResult.stats.coveragePercent) >= 40 ? 'yellow' : 'red'}
             />
           </div>
 
-          {/* 不足枠メッセージ（STEP 3で表示） */}
-          {step === 'assigned' && assignResult.gaps.length > 0 && (
-            <PageSection className="mb-4">
-              <h3 className="text-sm font-bold text-[#FF3B30] mb-3 flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4" />
-                人手が足りない時間帯があります
-              </h3>
-              <div className="space-y-2 max-h-[300px] overflow-y-auto">
-                {assignResult.gaps.map((gap, i) => (
-                  <div key={i} className="flex items-center justify-between bg-[#FF3B30]/5 border border-[#FF3B30]/10 rounded-lg px-3 py-2">
-                    <div className="flex items-center gap-3">
-                      <span className="text-sm font-medium text-[#1D1D1F]">
-                        {parseResult.period.month}/{gap.day}({getDayOfWeek(parseResult.period.year, parseResult.period.month, gap.day)})
-                      </span>
-                      <Badge variant="outline" className="text-xs border-[#FF3B30]/30 text-[#FF3B30]">
-                        {gap.slotLabel} {gap.startTime}-{gap.endTime}
-                      </Badge>
-                    </div>
-                    <span className="text-sm text-[#FF3B30] font-medium">
-                      あと{gap.shortage}人足りません
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </PageSection>
-          )}
-
-          {/* シフト表 */}
-          <PageSection className="overflow-x-auto">
-            <h2 className="text-lg font-bold text-[#1D1D1F] mb-4">
-              シフト表: {parseResult.period.month}月{parseResult.period.half === 'first' ? '前半' : '後半'}
-            </h2>
-            <div className="min-w-[700px]">
-              {shiftTableData.days.map(day => {
-                const { year, month } = shiftTableData.period;
-                const dow = getDayOfWeek(year, month, day);
-                const isWeekend = dow === '土' || dow === '日';
-                const daySlots = getSlotsForDay(day);
-
-                return (
-                  <div key={day} className={`grid gap-1 mb-1 rounded-lg ${isWeekend ? 'bg-[#F5F5F7]' : ''}`}
-                    style={{ gridTemplateColumns: `80px repeat(${daySlots.length}, 1fr)` }}>
-                    <div className={`text-sm font-medium text-center py-2 rounded-lg ${
-                      dow === '日' ? 'text-[#FF3B30]' : dow === '土' ? 'text-[#007AFF]' : 'text-[#1D1D1F]'
-                    }`}>
-                      {month}/{day}({dow})
-                    </div>
-                    {daySlots.map(slot => {
-                      const assigned = assignResult.shifts.filter(s => s.day === day && s.slotId === slot.id);
-                      const manual = manualShifts.filter(s => s.day === day && s.slotId === slot.id);
-                      const gap = assignResult.gaps.find(g => g.day === day && g.slotId === slot.id);
-                      const isCurrentGap = step === 'fill-gaps' && currentGap?.day === day && currentGap?.slotId === slot.id;
-                      const totalAssigned = assigned.length + manual.length;
-                      const isFull = totalAssigned >= slot.required;
-
-                      return (
-                        <div key={slot.id} className={`text-xs py-1.5 px-2 rounded-lg min-h-[36px] transition-all ${
-                          isCurrentGap ? 'ring-2 ring-[#007AFF] bg-[#007AFF]/10' :
-                          isFull ? 'bg-[#34C759]/10 border border-[#34C759]/20' :
-                          gap ? 'bg-[#FF3B30]/10 border border-[#FF3B30]/20' :
-                          'bg-[#34C759]/10 border border-[#34C759]/20'
-                        }`}>
-                          <div className="text-[9px] text-[#86868B] mb-0.5">{slot.label} {slot.start}-{slot.end} ({slot.required}人)</div>
-                          {assigned.map((s, i) => (
-                            <div key={`a-${s.staffName}-${i}`} className="text-[#1D1D1F] truncate">
-                              {s.staffName} <span className="text-[10px] text-[#86868B]">{s.startTime}-{s.endTime}</span>
-                            </div>
-                          ))}
-                          {manual.map((s, i) => (
-                            <div key={`m-${s.name}-${i}`} className="text-[#007AFF] font-medium truncate">{s.name} (社員)</div>
-                          ))}
-                          {gap && !isFull && (
-                            <div className="text-[#FF3B30] text-[10px]">-{gap.shortage}人不足</div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                );
-              })}
-            </div>
-          </PageSection>
-
+          {/* 社員名（固定入力） */}
           {step === 'assigned' && (
-            <div className="flex items-center justify-between mt-4">
-              <Button variant="outline" onClick={() => setStep('parsed')} className="rounded-xl">
-                <ChevronLeft className="w-4 h-4 mr-1" />戻る
-              </Button>
-              {assignResult.gaps.length > 0 ? (
-                <Button onClick={handleStartFillGaps} className="bg-[#FF9500] hover:bg-[#E68600] text-white rounded-xl px-6">
-                  <UserPlus className="w-4 h-4 mr-2" />社員を配置する（{assignResult.gaps.length}枠）
-                </Button>
-              ) : (
-                <Button onClick={() => setStep('complete')} className="bg-[#34C759] hover:bg-[#2DB84E] text-white rounded-xl px-6">
-                  <CheckCircle2 className="w-4 h-4 mr-2" />完了
-                </Button>
-              )}
+            <div className="bg-white rounded-xl border border-[#E5E5EA] p-3 mb-4 flex items-center gap-3">
+              <label className="text-sm text-[#86868B] flex-shrink-0">社員名:</label>
+              <input type="text" value={managerName} onChange={e => setManagerName(e.target.value)}
+                className="flex-1 px-3 py-1.5 border border-[#E5E5EA] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#007AFF]" />
             </div>
           )}
+
+          {/* 日別カード */}
+          <div className="space-y-3">
+            {shiftTableDays.map(day => {
+              const { year, month } = parseResult.period;
+              const dow = getDayOfWeek(year, month, day);
+              const dowNum = getDow(year, month, day);
+              const isWeekend = dowNum === 0 || dowNum === 6;
+
+              const dayShifts = assignResult.shifts.filter(s => s.day === day);
+              const dayManual = manualShifts.filter(s => s.day === day);
+              const dayGaps = assignResult.gaps.filter(g => g.day === day);
+              const filledGapKeys = new Set(dayManual.map(s => s.slotId));
+              const remainingGaps = dayGaps.filter(g => !filledGapKeys.has(g.slotId));
+              const isAddOpen = openAddDay === day;
+
+              return (
+                <div key={day} className={`rounded-2xl border overflow-hidden ${
+                  isWeekend ? 'border-[#007AFF]/20 bg-[#007AFF]/[0.02]' : 'border-[#E5E5EA] bg-white'
+                }`}>
+                  {/* 日付ヘッダー */}
+                  <div className={`px-4 py-2.5 flex items-center justify-between ${
+                    isWeekend ? 'bg-[#007AFF]/5' : 'bg-[#F5F5F7]'
+                  }`}>
+                    <span className={`text-sm font-bold ${
+                      dowNum === 0 ? 'text-[#FF3B30]' : dowNum === 6 ? 'text-[#007AFF]' : 'text-[#1D1D1F]'
+                    }`}>
+                      {month}/{day}（{dow}）
+                    </span>
+                    <div className="flex items-center gap-2">
+                      {dayShifts.length > 0 && (
+                        <Badge variant="outline" className="text-[10px] border-[#34C759]/30 text-[#34C759]">
+                          {dayShifts.length}名配置
+                        </Badge>
+                      )}
+                      {remainingGaps.length > 0 && (
+                        <Badge variant="outline" className="text-[10px] border-[#FF9500]/30 text-[#FF9500]">
+                          {remainingGaps.length}枠空き
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="px-4 py-3">
+                    {/* 配置済みスタッフ */}
+                    {(dayShifts.length > 0 || dayManual.length > 0) && (
+                      <div className="space-y-1.5 mb-3">
+                        {dayShifts.map((s, i) => (
+                          <div key={`a-${i}`} className="flex items-center gap-2 text-sm">
+                            <Clock className="w-3.5 h-3.5 text-[#86868B]" />
+                            <span className="text-[#86868B] text-xs w-24">{s.startTime}-{s.endTime}</span>
+                            <span className="text-[#1D1D1F] font-medium">{s.staffName}</span>
+                          </div>
+                        ))}
+                        {dayManual.map((s, i) => (
+                          <div key={`m-${i}`} className="flex items-center gap-2 text-sm">
+                            <Clock className="w-3.5 h-3.5 text-[#007AFF]" />
+                            <span className="text-[#007AFF] text-xs w-24">{s.startTime}-{s.endTime}</span>
+                            <span className="text-[#007AFF] font-medium">{s.name}（社員）</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* 不足メッセージ */}
+                    {remainingGaps.length > 0 && (
+                      <div className="space-y-1.5">
+                        {remainingGaps.map((gap, i) => (
+                          <div key={i} className="flex items-center gap-2 text-sm text-[#FF9500]">
+                            <MessageCircle className="w-3.5 h-3.5 flex-shrink-0" />
+                            <span>{gap.slotLabel}（{gap.startTime}-{gap.endTime}）あと{gap.shortage}人ほしい</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* 配置なし＆不足なし */}
+                    {dayShifts.length === 0 && dayManual.length === 0 && remainingGaps.length === 0 && (
+                      <p className="text-sm text-[#D2D2D7]">配置なし</p>
+                    )}
+
+                    {/* 社員追加ボタン */}
+                    {step === 'assigned' && remainingGaps.length > 0 && (
+                      <div className="mt-3 pt-3 border-t border-[#E5E5EA]/50">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setOpenAddDay(isAddOpen ? null : day)}
+                          className="rounded-lg text-xs border-[#007AFF]/30 text-[#007AFF] hover:bg-[#007AFF]/5 w-full justify-between"
+                        >
+                          <span className="flex items-center gap-1.5">
+                            <UserPlus className="w-3.5 h-3.5" />社員を入れる
+                          </span>
+                          <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isAddOpen ? 'rotate-180' : ''}`} />
+                        </Button>
+
+                        {isAddOpen && (
+                          <div className="mt-2 space-y-2">
+                            {remainingGaps.map((gap, i) => (
+                              <button
+                                key={i}
+                                onClick={() => handleAddManager(day, gap)}
+                                className="w-full text-left px-3 py-2.5 rounded-lg bg-[#007AFF]/5 hover:bg-[#007AFF]/10 transition-colors border border-[#007AFF]/10"
+                              >
+                                <div className="flex items-center justify-between">
+                                  <div>
+                                    <span className="text-sm font-medium text-[#007AFF]">{gap.slotLabel}</span>
+                                    <span className="text-xs text-[#86868B] ml-2">{gap.startTime}-{gap.endTime}</span>
+                                  </div>
+                                  <Badge className="bg-[#007AFF] text-white text-[10px]">
+                                    {managerName}を入れる
+                                  </Badge>
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* ボトム操作 */}
+          <div className="flex items-center justify-between mt-6">
+            <Button variant="outline" onClick={() => setStep('parsed')} className="rounded-xl">
+              <ChevronLeft className="w-4 h-4 mr-1" />戻る
+            </Button>
+            {step === 'assigned' && (
+              <Button onClick={() => setStep('complete')} className="bg-[#34C759] hover:bg-[#2DB84E] text-white rounded-xl px-6">
+                <CheckCircle2 className="w-4 h-4 mr-2" />完了
+              </Button>
+            )}
+          </div>
         </>
       )}
 
-      {/* ========== STEP 4: 社員配置ウィザード ========== */}
-      {step === 'fill-gaps' && currentGap && assignResult && parseResult && (
-        <PageSection className="mt-4">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-bold text-[#1D1D1F] flex items-center gap-2">
-              <UserPlus className="w-5 h-5 text-[#FF9500]" />社員配置
-            </h2>
-            <Badge variant="outline" className="text-sm">{currentGapIndex + 1} / {assignResult.gaps.length}</Badge>
-          </div>
-
-          <div className="bg-[#FF9500]/10 border border-[#FF9500]/30 rounded-2xl p-6 text-center">
-            <p className="text-2xl font-bold text-[#1D1D1F] mb-2">
-              {parseResult.period.month}/{currentGap.day}
-              ({getDayOfWeek(parseResult.period.year, parseResult.period.month, currentGap.day)})
-              &nbsp;{currentGap.slotLabel}
-            </p>
-            <p className="text-lg text-[#86868B] mb-1">{currentGap.startTime} 〜 {currentGap.endTime}</p>
-            <p className="text-[#FF3B30] font-medium">あと{currentGap.shortage}人足りません</p>
-          </div>
-
-          <div className="mt-4 mb-4">
-            <label className="text-sm text-[#86868B] mb-1 block">配置する社員名</label>
-            <input type="text" value={managerName} onChange={(e) => setManagerName(e.target.value)}
-              className="w-full px-4 py-2 border border-[#E5E5EA] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#007AFF]" />
-          </div>
-
-          <div className="flex gap-3">
-            <Button onClick={handleFillGap} disabled={!managerName.trim()} className="flex-1 bg-[#007AFF] hover:bg-[#0056CC] text-white rounded-xl h-14 text-base">
-              <UserPlus className="w-5 h-5 mr-2" />自分を入れる
-            </Button>
-            <Button onClick={handleSkipGap} variant="outline" className="flex-1 rounded-xl h-14 text-base border-[#E5E5EA]">
-              <SkipForward className="w-5 h-5 mr-2" />スキップ
-            </Button>
-          </div>
-
-          <div className="mt-4">
-            <div className="w-full bg-[#E5E5EA] rounded-full h-2">
-              <div className="bg-[#007AFF] rounded-full h-2 transition-all duration-300"
-                style={{ width: `${((currentGapIndex + 1) / assignResult.gaps.length) * 100}%` }} />
-            </div>
-          </div>
-        </PageSection>
-      )}
-
-      {/* ========== STEP 5: 完成 ========== */}
+      {/* ===== STEP 4: 完成 ===== */}
       {step === 'complete' && finalStats && (
         <PageSection className="mt-4">
           <div className="text-center py-8">
             <CheckCircle2 className="w-16 h-16 text-[#34C759] mx-auto mb-4" />
             <h2 className="text-2xl font-bold text-[#1D1D1F] mb-2">シフト作成完了</h2>
             <p className="text-[#86868B] mb-6">
-              カバー率: {finalStats.coveragePercent}%（自動{finalStats.autoFilled}枠 + 社員{finalStats.manualFilled}枠）
+              カバー率: {finalStats.coveragePercent}%（バイト{finalStats.autoFilled}枠 + 社員{finalStats.manualFilled}枠）
             </p>
             {finalStats.remainingGaps > 0 && (
               <div className="bg-[#FF9500]/10 border border-[#FF9500]/30 rounded-xl p-4 mb-6 max-w-md mx-auto">
                 <p className="text-sm text-[#FF9500]">
-                  <AlertTriangle className="w-4 h-4 inline mr-1" />残り{finalStats.remainingGaps}枠が未配置です。ヘルプ募集で対応してください。
+                  <AlertTriangle className="w-4 h-4 inline mr-1" />残り{finalStats.remainingGaps}枠が未配置です
                 </p>
               </div>
             )}
             <div className="flex gap-3 justify-center">
-              <Button variant="outline" onClick={() => { setStep('assigned'); setCurrentGapIndex(0); }} className="rounded-xl">シフト表を確認</Button>
+              <Button variant="outline" onClick={() => setStep('assigned')} className="rounded-xl">シフト表を確認</Button>
               <Button onClick={resetAll} className="bg-[#007AFF] hover:bg-[#0056CC] text-white rounded-xl">新しいシフトを作成</Button>
             </div>
           </div>
@@ -639,16 +505,14 @@ function StaffParseCard({ staff, period }: { staff: ParsedStaff; period: ParseRe
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {staff.constraints && (
-            <Badge variant="outline" className="text-[10px] border-[#FF9500]/30 text-[#FF9500]">{staff.constraints[0]}</Badge>
-          )}
+          {staff.constraints && <Badge variant="outline" className="text-[10px] border-[#FF9500]/30 text-[#FF9500]">{staff.constraints[0]}</Badge>}
           <Badge variant="outline" className={`text-xs ${availableDays > 0 ? 'border-[#34C759]/30 text-[#34C759]' : 'border-[#FF3B30]/30 text-[#FF3B30]'}`}>
             {availableDays}/{totalDays}日可
           </Badge>
         </div>
       </div>
       <div className="flex flex-wrap gap-1">
-        {staff.entries.map((entry) => {
+        {staff.entries.map(entry => {
           const dow = getDayOfWeek(period.year, period.month, entry.day);
           return (
             <div key={entry.day} className={`text-[10px] px-1.5 py-0.5 rounded ${
