@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import type { SessionUser } from '@/lib/auth';
 import { timeToMinutes } from '@/lib/time-constants';
+import { PeriodOverview } from './period-overview';
 
 const DAY_NAMES = ['日', '月', '火', '水', '木', '金', '土'];
 const TOTAL_MINUTES = 24 * 60;
@@ -204,6 +205,7 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
   };
 
   const [currentDate, setCurrentDate] = useState(getInitialDate);
+  const [viewMode, setViewMode] = useState<'overview' | 'daily'>('overview');
   const [stores, setStores] = useState<Store[]>([]);
   const [selectedStoreId, setSelectedStoreId] = useState('');
   const [shifts, setShifts] = useState<Shift[]>([]);
@@ -225,6 +227,15 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
     const ms = String(month).padStart(2, '0');
     if (day <= 15) return `${ms}/01 〜 ${ms}/15`;
     return `${ms}/16 〜 ${ms}/${new Date(y, month, 0).getDate()}`;
+  }, [dateObj]);
+
+  // 期間の開始日・終了日（概要表示用）
+  const periodDates = useMemo(() => {
+    const y = dateObj.getFullYear(); const month = dateObj.getMonth() + 1; const day = dateObj.getDate();
+    const ms = String(month).padStart(2, '0');
+    if (day <= 15) return { start: `${y}-${ms}-01`, end: `${y}-${ms}-15` };
+    const lastDay = new Date(y, month, 0).getDate();
+    return { start: `${y}-${ms}-16`, end: `${y}-${ms}-${lastDay}` };
   }, [dateObj]);
 
   useEffect(() => {
@@ -325,8 +336,42 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
     return slots;
   }, [shifts, requirements]);
 
+  // ヘルプ募集作成
+  const handleCreateHelpRequest = useCallback(async (date: string, startTime: string, endTime: string, shortage: number) => {
+    if (!selectedStoreId) return;
+    try {
+      const staffRes = await fetch(`/api/staff?storeId=${selectedStoreId}`);
+      const staffList = staffRes.ok ? await staffRes.json() : [];
+      const manager = staffList.find((s: { employmentType: string }) => s.employmentType === 'employee');
+      if (!manager) { alert('社員が登録されていないためヘルプ募集を作成できません'); return; }
+
+      const res = await fetch('/api/help-requests', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          storeId: parseInt(selectedStoreId),
+          requestedBy: manager.id,
+          needDate: date,
+          needStart: startTime,
+          needEnd: endTime,
+          memo: `${shortage}人不足`,
+          offerType: 'emergency',
+        }),
+      });
+      if (res.ok) alert('ヘルプ募集を作成しました');
+      else alert('ヘルプ募集の作成に失敗しました');
+    } catch { alert('エラーが発生しました'); }
+  }, [selectedStoreId]);
+
+  // 概要から日別に遷移
+  const handleNavigateToDay = useCallback((date: string) => {
+    setCurrentDate(date);
+    setViewMode('daily');
+    window.history.replaceState(null, '', `/dashboard/shift-adjust?date=${date}`);
+  }, []);
+
   return (
-    <DashboardLayout user={user} title="シフト微調整" description="バーの端をドラッグして時間を調整"
+    <DashboardLayout user={user} title="シフト微調整" description="2週間の概要確認・PDF出力・1日ずつ編集"
       actions={stores.length > 1 ? (
         <Select value={selectedStoreId} onValueChange={setSelectedStoreId}>
           <SelectTrigger className="w-[180px] border-[#E5E5EA] bg-white"><SelectValue placeholder="店舗を選択" /></SelectTrigger>
@@ -334,6 +379,39 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
         </Select>
       ) : undefined}>
 
+      {/* モード切替タブ */}
+      <div className="flex gap-2 mb-4">
+        <Button
+          variant={viewMode === 'overview' ? 'default' : 'outline'}
+          onClick={() => setViewMode('overview')}
+          className={`rounded-xl ${viewMode === 'overview' ? 'bg-[#007AFF] text-white' : ''}`}
+        >
+          2週間概要
+        </Button>
+        <Button
+          variant={viewMode === 'daily' ? 'default' : 'outline'}
+          onClick={() => setViewMode('daily')}
+          className={`rounded-xl ${viewMode === 'daily' ? 'bg-[#007AFF] text-white' : ''}`}
+        >
+          1日ずつ編集
+        </Button>
+      </div>
+
+      {/* ===== 概要モード ===== */}
+      {viewMode === 'overview' && selectedStoreId && (
+        <PeriodOverview
+          storeId={selectedStoreId}
+          storeName={stores.find(s => String(s.id) === selectedStoreId)?.name || ''}
+          periodStart={periodDates.start}
+          periodEnd={periodDates.end}
+          onNavigateToDay={handleNavigateToDay}
+          onCreateHelpRequest={handleCreateHelpRequest}
+        />
+      )}
+
+      {/* ===== 日別モード ===== */}
+      {viewMode === 'daily' && (
+        <>
       {/* 日付ナビ */}
       <div className="flex items-center justify-between mb-4">
         <Button variant="outline" onClick={() => navigateDay(-1)} className="rounded-xl h-12 w-12"><ChevronLeft className="w-6 h-6" /></Button>
@@ -480,6 +558,8 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
               次の日へ <ChevronRight className="w-5 h-5 ml-1" />
             </Button>
           </div>
+        </>
+      )}
         </>
       )}
     </DashboardLayout>
