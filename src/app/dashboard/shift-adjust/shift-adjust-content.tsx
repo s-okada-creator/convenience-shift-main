@@ -50,29 +50,32 @@ interface Requirement { id: number; storeId: number; dayOfWeek: number; timeSlot
 // ===== ドラッグリサイズ可能なシフトバー =====
 function ResizableShiftBar({
   shift, containerRef, isEmployee, isEditing,
-  onStartEdit, onUpdate, onDelete,
+  onStartEdit, onUpdate,
 }: {
   shift: Shift; containerRef: React.RefObject<HTMLDivElement | null>;
   isEmployee: boolean; isEditing: boolean;
   onStartEdit: () => void;
   onUpdate: (id: number, startTime: string, endTime: string) => void;
-  onDelete: (id: number) => void;
 }) {
   const startMin = timeToMinutes(shift.startTime.slice(0, 5));
   const endMin = timeToMinutes(shift.endTime.slice(0, 5));
   const isOvernight = endMin <= startMin;
 
+  // ドラッグ中の一時値をstateで管理
+  const initEnd = isOvernight ? endMin + TOTAL_MINUTES : endMin;
   const [tempStart, setTempStart] = useState(startMin);
-  const [tempEnd, setTempEnd] = useState(isOvernight ? endMin + TOTAL_MINUTES : endMin);
+  const [tempEnd, setTempEnd] = useState(initEnd);
   const [dragging, setDragging] = useState<'left' | 'right' | null>(null);
 
-  // sync with prop changes
-  useEffect(() => {
-    const s = timeToMinutes(shift.startTime.slice(0, 5));
-    const e = timeToMinutes(shift.endTime.slice(0, 5));
-    setTempStart(s);
-    setTempEnd(e <= s ? e + TOTAL_MINUTES : e);
-  }, [shift.startTime, shift.endTime]);
+  // ドラッグ中でないときはprop値を使う（prop変更に追従）
+  const displayStart = dragging ? tempStart : startMin;
+  const displayEnd = dragging ? tempEnd : initEnd;
+
+  // refでドラッグ中の最新値を保持（handleUp時に参照）
+  const tempStartRef = useRef(startMin);
+  const tempEndRef = useRef(initEnd);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- ref同期はeffect内で安全
+  useEffect(() => { tempStartRef.current = displayStart; tempEndRef.current = displayEnd; }, [displayStart, displayEnd]);
 
   const barColor = isEmployee ? 'bg-[#34C759]' : 'bg-[#007AFF]';
 
@@ -85,11 +88,10 @@ function ResizableShiftBar({
     const container = containerRef.current;
     if (!container) return;
 
-    const containerRect = container.getBoundingClientRect();
-    const containerWidth = containerRect.width;
+    const containerWidth = container.getBoundingClientRect().width;
     const startX = e.clientX;
-    const origStart = tempStart;
-    const origEnd = isOvernight ? endMin + TOTAL_MINUTES : endMin;
+    const origStart = tempStartRef.current;
+    const origEnd = tempEndRef.current;
 
     const handleMove = (ev: PointerEvent) => {
       const dx = ev.clientX - startX;
@@ -97,12 +99,14 @@ function ResizableShiftBar({
 
       if (side === 'left') {
         let newStart = snapToGrid(origStart + dMin);
-        newStart = Math.max(0, Math.min(newStart, origEnd - 30)); // 最短30分
+        newStart = Math.max(0, Math.min(newStart, origEnd - 30));
         setTempStart(newStart);
+        tempStartRef.current = newStart;
       } else {
         let newEnd = snapToGrid(origEnd + dMin);
-        newEnd = Math.max(origStart + 30, Math.min(newEnd, TOTAL_MINUTES + 6 * 60)); // 翌6時まで
+        newEnd = Math.max(origStart + 30, Math.min(newEnd, TOTAL_MINUTES + 6 * 60));
         setTempEnd(newEnd);
+        tempEndRef.current = newEnd;
       }
     };
 
@@ -111,35 +115,16 @@ function ResizableShiftBar({
       document.removeEventListener('pointermove', handleMove);
       document.removeEventListener('pointerup', handleUp);
 
-      // 保存
-      const finalStart = side === 'left' ? snapToGrid(tempStart) : origStart;
-      const finalEnd = side === 'right' ? snapToGrid(isOvernight ? endMin + TOTAL_MINUTES : endMin) : origEnd;
-      // 再計算
-      const newStartRef = { current: finalStart };
-      const newEndRef = { current: finalEnd };
-
-      if (side === 'left') {
-        // tempStartから取得
-        // useStateは非同期なのでrefで管理
-      }
-
-      // setTimeout for state to settle
-      setTimeout(() => {
-        const s = side === 'left' ? tempStart : origStart;
-        const e = side === 'right' ? tempEnd : origEnd;
-        const startStr = minToTime(s);
-        const endStr = e >= TOTAL_MINUTES ? minToTime(e - TOTAL_MINUTES) : minToTime(e);
-        onUpdate(shift.id, startStr, endStr);
-      }, 0);
+      const s = tempStartRef.current;
+      const e = tempEndRef.current;
+      const startStr = minToTime(s);
+      const endStr = e >= TOTAL_MINUTES ? minToTime(e - TOTAL_MINUTES) : minToTime(e);
+      onUpdate(shift.id, startStr, endStr);
     };
 
     document.addEventListener('pointermove', handleMove);
     document.addEventListener('pointerup', handleUp);
-  }, [containerRef, tempStart, tempEnd, shift.id, onUpdate, isOvernight, endMin]);
-
-  // 表示計算
-  const displayStart = tempStart;
-  const displayEnd = tempEnd;
+  }, [containerRef, shift.id, onUpdate]);
 
   // 通常シフト or 日跨ぎで分けて描画
   if (displayEnd <= TOTAL_MINUTES) {
@@ -415,7 +400,7 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
                           isEditing={editingShift?.id === shift.id}
                           onStartEdit={() => { setEditingShift(shift); setShowAddForm(false); }}
                           onUpdate={handleShiftUpdate}
-                          onDelete={handleDeleteShift}
+
                         />
                       </div>
                     </div>
