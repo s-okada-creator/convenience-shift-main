@@ -6,33 +6,17 @@ import { DashboardLayout, PageSection } from '@/components/layout/dashboard-layo
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import {
-  Wand2,
-  CheckCircle2,
-  AlertTriangle,
-  ChevronRight,
-  ChevronLeft,
-  Sparkles,
-  Info,
-  Calendar,
-  Loader2,
-  UserX,
+  Wand2, CheckCircle2, AlertTriangle, ChevronRight, ChevronLeft,
+  Sparkles, Info, Calendar, Loader2,
 } from 'lucide-react';
 import type { SessionUser } from '@/lib/auth';
-import { parseLineChat, type ParseResult, type ParsedStaff } from '@/lib/line-parser';
+import { parseLineChat, type ParseResult } from '@/lib/line-parser';
 import {
-  autoAssign,
-  dbRequirementsToSlots,
-  type AssignResult,
-  type TimeSlotDef,
-  type DbRequirement,
-  DEFAULT_TIME_SLOTS,
+  autoAssign, dbRequirementsToSlots,
+  type AssignResult, type TimeSlotDef, type DbRequirement, DEFAULT_TIME_SLOTS,
 } from '@/lib/line-parser/assigner';
 
 type Step = 'input' | 'parsed' | 'saving' | 'complete';
@@ -58,27 +42,23 @@ export function ShiftCreateContent({ user }: { user: SessionUser }) {
   const router = useRouter();
   const [step, setStep] = useState<Step>('input');
 
-  // 店舗・DB
   const [stores, setStores] = useState<Store[]>([]);
   const [selectedStoreId, setSelectedStoreId] = useState('');
   const [dbRequirements, setDbRequirements] = useState<DbRequirement[]>([]);
   const [dbStaff, setDbStaff] = useState<DbStaff[]>([]);
   const [requirementsLoaded, setRequirementsLoaded] = useState(false);
 
-  // STEP 1
   const [lineText, setLineText] = useState('');
   const [targetMonth, setTargetMonth] = useState(String(new Date().getMonth() + 1));
   const [targetHalf, setTargetHalf] = useState<'first' | 'second'>('first');
   const [targetYear, setTargetYear] = useState(String(new Date().getFullYear()));
 
-  // STEP 2
   const [parseResult, setParseResult] = useState<ParseResult | null>(null);
   const [assignResult, setAssignResult] = useState<AssignResult | null>(null);
+  // 登録後のスタッフマップ（名前→staffId）
+  const [registeredStaffMap, setRegisteredStaffMap] = useState<Map<string, number>>(new Map());
 
-  // STEP 3
-  const [saveProgress, setSaveProgress] = useState({ total: 0, done: 0, errors: 0 });
-
-  // STEP 4
+  const [saveProgress, setSaveProgress] = useState({ total: 0, done: 0, errors: 0, phase: '' });
   const [savedCount, setSavedCount] = useState(0);
 
   // --- データ取得 ---
@@ -98,7 +78,6 @@ export function ShiftCreateContent({ user }: { user: SessionUser }) {
 
   useEffect(() => {
     if (!selectedStoreId) return;
-    // 必要人数とスタッフを同時取得
     Promise.all([
       fetch(`/api/shift-requirements?storeId=${selectedStoreId}`).then(r => r.ok ? r.json() : []),
       fetch(`/api/staff?storeId=${selectedStoreId}`).then(r => r.ok ? r.json() : []),
@@ -121,115 +100,113 @@ export function ShiftCreateContent({ user }: { user: SessionUser }) {
     return map.size > 0 ? map : null;
   }, [dbRequirements]);
 
-  // パース結果の名前とDBスタッフのマッチング
-  const staffMatchMap = useMemo((): Map<string, number> => {
-    const map = new Map<string, number>();
-    if (!parseResult) return map;
-
-    for (const parsed of parseResult.staff) {
-      const normalizedName = parsed.name.replace(/\s+/g, '');
-      // 完全一致
-      const exact = dbStaff.find(s => s.name.replace(/\s+/g, '') === normalizedName);
-      if (exact) { map.set(parsed.name, exact.id); continue; }
-      // 部分一致（DB名がパース名を含む or 逆）
-      const partial = dbStaff.find(s =>
-        s.name.replace(/\s+/g, '').includes(normalizedName) ||
-        normalizedName.includes(s.name.replace(/\s+/g, ''))
-      );
-      if (partial) { map.set(parsed.name, partial.id); }
-    }
-    return map;
-  }, [parseResult, dbStaff]);
-
-  const unmatchedStaff = useMemo(() => {
+  // 希望を出した人（available=trueが1日以上ある人）
+  const activeStaff = useMemo(() => {
     if (!parseResult) return [];
-    return parseResult.staff.filter(s => !staffMatchMap.has(s.name) && s.entries.some(e => e.available));
-  }, [parseResult, staffMatchMap]);
+    return parseResult.staff.filter(s => s.entries.some(e => e.available));
+  }, [parseResult]);
 
   const resetAll = useCallback(() => {
     setStep('input');
     setLineText('');
     setParseResult(null);
     setAssignResult(null);
-    setSaveProgress({ total: 0, done: 0, errors: 0 });
+    setRegisteredStaffMap(new Map());
+    setSaveProgress({ total: 0, done: 0, errors: 0, phase: '' });
     setSavedCount(0);
   }, []);
 
-  // --- STEP 1: 解析 + 自動配置を一気にやる ---
+  // --- STEP 1: 解析 + 自動配置 ---
   const handleParseAndAssign = useCallback(() => {
     if (!lineText.trim()) return;
     const parsed = parseLineChat(lineText, parseInt(targetMonth), targetHalf, parseInt(targetYear));
     setParseResult(parsed);
-
     if (parsed.staff.length > 0) {
-      const result = autoAssign(parsed, slotsByDow || undefined);
-      setAssignResult(result);
+      setAssignResult(autoAssign(parsed, slotsByDow || undefined));
     }
     setStep('parsed');
   }, [lineText, targetMonth, targetHalf, targetYear, slotsByDow]);
 
-  // --- STEP 2 → 3: シフトをDBに一括登録 ---
+  // --- STEP 2→3: 未登録スタッフ自動登録 → シフト一括登録 ---
   const handleSaveShifts = useCallback(async () => {
     if (!assignResult || !parseResult) return;
-
     const storeId = parseInt(selectedStoreId);
     const { year, month } = parseResult.period;
 
-    // DBに登録するシフトデータを構築
-    const shiftsToSave: { staffId: number; date: string; startTime: string; endTime: string }[] = [];
-
-    for (const shift of assignResult.shifts) {
-      const staffId = staffMatchMap.get(shift.staffName);
-      if (!staffId) continue;
-
-      const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(shift.day).padStart(2, '0')}`;
-      shiftsToSave.push({
-        staffId,
-        date: dateStr,
-        startTime: shift.startTime,
-        endTime: shift.endTime,
-      });
-    }
-
-    if (shiftsToSave.length === 0) {
-      alert('登録できるシフトがありません。スタッフがDB未登録の可能性があります。');
-      return;
-    }
-
     setStep('saving');
-    setSaveProgress({ total: shiftsToSave.length, done: 0, errors: 0 });
+
+    // === PHASE 1: 未登録スタッフをDBに自動登録 ===
+    setSaveProgress({ total: 0, done: 0, errors: 0, phase: 'スタッフを登録中...' });
+
+    const staffMap = new Map<string, number>(); // name → staffId
+
+    // 既存DBスタッフとマッチング
+    for (const parsed of activeStaff) {
+      const normalizedName = parsed.name.replace(/\s+/g, '');
+      const exact = dbStaff.find(s => s.name.replace(/\s+/g, '') === normalizedName);
+      if (exact) { staffMap.set(parsed.name, exact.id); continue; }
+      const partial = dbStaff.find(s =>
+        s.name.replace(/\s+/g, '').includes(normalizedName) ||
+        normalizedName.includes(s.name.replace(/\s+/g, ''))
+      );
+      if (partial) { staffMap.set(parsed.name, partial.id); }
+    }
+
+    // 未登録スタッフを自動登録
+    const unmatched = activeStaff.filter(s => !staffMap.has(s.name));
+    for (const staff of unmatched) {
+      try {
+        const res = await fetch('/api/staff', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            storeId,
+            name: staff.name,
+            employmentType: 'part_time',
+            hourlyRate: 1000,
+            joinedAt: new Date().toISOString().slice(0, 10),
+            skillLevel: 1,
+            role: 'staff',
+          }),
+        });
+        if (res.ok) {
+          const newStaff = await res.json();
+          staffMap.set(staff.name, newStaff.id);
+        }
+      } catch { /* continue */ }
+    }
+
+    setRegisteredStaffMap(staffMap);
+
+    // === PHASE 2: シフト登録 ===
+    const shiftsToSave: { staffId: number; date: string; startTime: string; endTime: string }[] = [];
+    for (const shift of assignResult.shifts) {
+      const staffId = staffMap.get(shift.staffName);
+      if (!staffId) continue;
+      const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(shift.day).padStart(2, '0')}`;
+      shiftsToSave.push({ staffId, date: dateStr, startTime: shift.startTime, endTime: shift.endTime });
+    }
+
+    setSaveProgress({ total: shiftsToSave.length, done: 0, errors: 0, phase: 'シフトを登録中...' });
 
     let done = 0;
     let errors = 0;
-
-    // 日ごとにまとめてバッチ登録
-    const byDate = new Map<string, typeof shiftsToSave>();
-    for (const s of shiftsToSave) {
-      const list = byDate.get(s.date) || [];
-      list.push(s);
-      byDate.set(s.date, list);
-    }
-
-    for (const [, dayShifts] of byDate) {
-      // 1件ずつPOST（既存シフトを上書きしないようPUTではなくPOST）
-      for (const shift of dayShifts) {
-        try {
-          const res = await fetch('/api/shifts', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ...shift, storeId }),
-          });
-          if (res.ok) { done++; } else { errors++; }
-        } catch { errors++; }
-        setSaveProgress({ total: shiftsToSave.length, done: done + errors, errors });
-      }
+    for (const shift of shiftsToSave) {
+      try {
+        const res = await fetch('/api/shifts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...shift, storeId }),
+        });
+        if (res.ok) done++; else errors++;
+      } catch { errors++; }
+      setSaveProgress({ total: shiftsToSave.length, done: done + errors, errors, phase: 'シフトを登録中...' });
     }
 
     setSavedCount(done);
     setStep('complete');
-  }, [assignResult, parseResult, selectedStoreId, staffMatchMap]);
+  }, [assignResult, parseResult, selectedStoreId, activeStaff, dbStaff]);
 
-  // --- レンダリング ---
   return (
     <DashboardLayout
       user={user}
@@ -260,7 +237,7 @@ export function ShiftCreateContent({ user }: { user: SessionUser }) {
         })}
       </div>
 
-      {/* ===== STEP 1: 入力 ===== */}
+      {/* ===== STEP 1 ===== */}
       {step === 'input' && (
         <PageSection>
           <h2 className="text-lg font-bold text-[#1D1D1F] mb-4">LINEトーク履歴を貼り付けてください</h2>
@@ -271,7 +248,7 @@ export function ShiftCreateContent({ user }: { user: SessionUser }) {
             }`}>
               <Info className="w-4 h-4 flex-shrink-0" />
               {dbRequirements.length > 0
-                ? `${stores.find(s => String(s.id) === selectedStoreId)?.name || '店舗'}: 必要人数設定OK / スタッフ${dbStaff.length}名登録済み`
+                ? `${stores.find(s => String(s.id) === selectedStoreId)?.name || '店舗'}: 必要人数設定OK`
                 : '必要人数が未設定です。先に「必要人数設定」で設定してください'}
             </div>
           )}
@@ -307,7 +284,7 @@ export function ShiftCreateContent({ user }: { user: SessionUser }) {
         </PageSection>
       )}
 
-      {/* ===== STEP 2: 確認 → 登録 ===== */}
+      {/* ===== STEP 2 ===== */}
       {step === 'parsed' && parseResult && (
         <>
           <PageSection>
@@ -325,25 +302,25 @@ export function ShiftCreateContent({ user }: { user: SessionUser }) {
             {parseResult.warnings.length > 0 && (
               <div className="bg-[#FF9500]/10 border border-[#FF9500]/30 rounded-xl p-3 mb-4">
                 {parseResult.warnings.map((w, i) => (
-                  <p key={i} className="text-sm text-[#FF9500] flex items-center gap-2"><AlertTriangle className="w-4 h-4 flex-shrink-0" />{w}</p>
+                  <p key={i} className="text-sm text-[#FF9500] flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 flex-shrink-0" />{w}
+                  </p>
                 ))}
               </div>
             )}
 
-            {/* マッチング結果 */}
+            {/* 希望を出した人の一覧 */}
             <div className="mb-4">
-              <h3 className="text-sm font-semibold text-[#1D1D1F] mb-2">スタッフマッチング（{staffMatchMap.size}/{parseResult.staff.length}名）</h3>
+              <h3 className="text-sm font-semibold text-[#1D1D1F] mb-2">
+                シフト希望提出者（{activeStaff.length}名）
+              </h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {parseResult.staff.map(s => {
-                  const matched = staffMatchMap.has(s.name);
+                {activeStaff.map(s => {
                   const availDays = s.entries.filter(e => e.available).length;
-                  if (availDays === 0) return null; // 全日×の人はスキップ
                   return (
-                    <div key={s.name} className={`flex items-center justify-between px-3 py-2 rounded-lg border ${
-                      matched ? 'border-[#34C759]/20 bg-[#34C759]/5' : 'border-[#FF3B30]/20 bg-[#FF3B30]/5'
-                    }`}>
+                    <div key={s.name} className="flex items-center justify-between px-3 py-2 rounded-lg border border-[#34C759]/20 bg-[#34C759]/5">
                       <div className="flex items-center gap-2">
-                        {matched ? <CheckCircle2 className="w-4 h-4 text-[#34C759]" /> : <UserX className="w-4 h-4 text-[#FF3B30]" />}
+                        <CheckCircle2 className="w-4 h-4 text-[#34C759]" />
                         <span className="text-sm font-medium text-[#1D1D1F]">{s.name}</span>
                       </div>
                       <span className="text-xs text-[#86868B]">{availDays}日出勤可</span>
@@ -351,19 +328,14 @@ export function ShiftCreateContent({ user }: { user: SessionUser }) {
                   );
                 })}
               </div>
+              {activeStaff.length === 0 && (
+                <div className="bg-[#FF3B30]/10 border border-[#FF3B30]/30 rounded-xl p-4 text-center">
+                  <p className="text-sm text-[#FF3B30]">出勤可能なスタッフが見つかりませんでした。</p>
+                </div>
+              )}
             </div>
 
-            {unmatchedStaff.length > 0 && (
-              <div className="bg-[#FF9500]/10 border border-[#FF9500]/30 rounded-xl p-3 mb-4">
-                <p className="text-sm text-[#FF9500]">
-                  <AlertTriangle className="w-4 h-4 inline mr-1" />
-                  {unmatchedStaff.length}名がスタッフ管理に未登録です（{unmatchedStaff.map(s => s.name).join('、')}）。
-                  先にスタッフ管理から登録してください。
-                </p>
-              </div>
-            )}
-
-            {/* シフトプレビュー（シンプル） */}
+            {/* シフトプレビュー */}
             {assignResult && assignResult.shifts.length > 0 && (
               <div className="border border-[#E5E5EA] rounded-xl p-4">
                 <h3 className="text-sm font-semibold text-[#1D1D1F] mb-3">登録されるシフト（プレビュー）</h3>
@@ -377,24 +349,19 @@ export function ShiftCreateContent({ user }: { user: SessionUser }) {
                     for (let d = startDay; d <= endDay; d++) days.push(d);
 
                     return days.map(day => {
-                      const dayShifts = assignResult.shifts.filter(s => s.day === day && staffMatchMap.has(s.staffName));
+                      const dayShifts = assignResult.shifts.filter(s => s.day === day);
                       if (dayShifts.length === 0) return null;
-
                       const dow = getDayOfWeek(year, month, day);
                       const dowNum = new Date(year, month - 1, day).getDay();
-
                       return (
                         <div key={day}>
                           <p className={`text-sm font-semibold mb-1 ${
                             dowNum === 0 ? 'text-[#FF3B30]' : dowNum === 6 ? 'text-[#007AFF]' : 'text-[#1D1D1F]'
-                          }`}>
-                            {month}/{day}（{dow}）
-                          </p>
+                          }`}>{month}/{day}（{dow}）</p>
                           <div className="space-y-1 pl-3">
                             {dayShifts.map((s, i) => (
                               <p key={i} className="text-sm text-[#86868B]">
-                                <span className="text-[#1D1D1F] font-medium">{s.staffName}</span>
-                                {' '}{s.startTime}-{s.endTime}
+                                <span className="text-[#1D1D1F] font-medium">{s.staffName}</span> {s.startTime}-{s.endTime}
                               </p>
                             ))}
                           </div>
@@ -413,34 +380,36 @@ export function ShiftCreateContent({ user }: { user: SessionUser }) {
             </Button>
             <Button
               onClick={handleSaveShifts}
-              disabled={!assignResult || assignResult.shifts.length === 0 || staffMatchMap.size === 0}
+              disabled={!assignResult || assignResult.shifts.length === 0}
               className="bg-[#34C759] hover:bg-[#2DB84E] text-white rounded-xl px-6"
             >
               <CheckCircle2 className="w-4 h-4 mr-2" />
-              シフトを登録する（{assignResult?.shifts.filter(s => staffMatchMap.has(s.staffName)).length || 0}件）
+              シフトを登録する（{assignResult?.shifts.length || 0}件）
             </Button>
           </div>
         </>
       )}
 
-      {/* ===== STEP 3: 登録中 ===== */}
+      {/* ===== STEP 3 ===== */}
       {step === 'saving' && (
         <PageSection>
           <div className="text-center py-12">
             <Loader2 className="w-12 h-12 text-[#007AFF] mx-auto mb-4 animate-spin" />
-            <h2 className="text-xl font-bold text-[#1D1D1F] mb-2">シフトを登録しています...</h2>
-            <p className="text-[#86868B] mb-4">{saveProgress.done} / {saveProgress.total} 件</p>
-            <div className="w-64 mx-auto bg-[#E5E5EA] rounded-full h-2">
-              <div
-                className="bg-[#007AFF] rounded-full h-2 transition-all duration-300"
-                style={{ width: `${saveProgress.total > 0 ? (saveProgress.done / saveProgress.total) * 100 : 0}%` }}
-              />
-            </div>
+            <h2 className="text-xl font-bold text-[#1D1D1F] mb-2">{saveProgress.phase}</h2>
+            {saveProgress.total > 0 && (
+              <>
+                <p className="text-[#86868B] mb-4">{saveProgress.done} / {saveProgress.total} 件</p>
+                <div className="w-64 mx-auto bg-[#E5E5EA] rounded-full h-2">
+                  <div className="bg-[#007AFF] rounded-full h-2 transition-all duration-300"
+                    style={{ width: `${(saveProgress.done / saveProgress.total) * 100}%` }} />
+                </div>
+              </>
+            )}
           </div>
         </PageSection>
       )}
 
-      {/* ===== STEP 4: 完了 ===== */}
+      {/* ===== STEP 4 ===== */}
       {step === 'complete' && (
         <PageSection>
           <div className="text-center py-12">
@@ -456,7 +425,6 @@ export function ShiftCreateContent({ user }: { user: SessionUser }) {
             <div className="flex flex-col sm:flex-row gap-3 justify-center">
               <Button
                 onClick={() => {
-                  // 登録した期間の初日に飛ぶ
                   const startDay = parseResult?.period.half === 'first' ? '01' : '16';
                   const m = String(parseResult?.period.month || 1).padStart(2, '0');
                   const y = parseResult?.period.year || new Date().getFullYear();
@@ -466,34 +434,11 @@ export function ShiftCreateContent({ user }: { user: SessionUser }) {
               >
                 <Calendar className="w-4 h-4 mr-2" />シフト微調整を開く
               </Button>
-              <Button variant="outline" onClick={resetAll} className="rounded-xl">
-                続けて作成
-              </Button>
+              <Button variant="outline" onClick={resetAll} className="rounded-xl">続けて作成</Button>
             </div>
           </div>
         </PageSection>
       )}
     </DashboardLayout>
-  );
-}
-
-// ========== サブコンポーネント ==========
-
-function StaffParseCard({ staff, period }: { staff: ParsedStaff; period: ParseResult['period'] }) {
-  const availableDays = staff.entries.filter(e => e.available).length;
-  return (
-    <div className="border border-[#E5E5EA] rounded-xl p-3">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 bg-gradient-to-br from-[#007AFF] to-[#5856D6] rounded-full flex items-center justify-center text-white text-xs font-medium">
-            {staff.name.charAt(0)}
-          </div>
-          <p className="text-sm font-medium text-[#1D1D1F]">{staff.name}</p>
-        </div>
-        <Badge variant="outline" className={`text-xs ${availableDays > 0 ? 'border-[#34C759]/30 text-[#34C759]' : 'border-[#FF3B30]/30 text-[#FF3B30]'}`}>
-          {availableDays}日可
-        </Badge>
-      </div>
-    </div>
   );
 }
