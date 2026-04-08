@@ -40,3 +40,12 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 .env*.local
+
+# local scripts (contain hardcoded IDs / DB access)
+scripts/*.mjs
+scripts/test-*.ts
+
+# generated files
+*.pdf
+report.html
+generate-pdf.mjs
