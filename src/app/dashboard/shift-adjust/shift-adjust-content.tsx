@@ -133,8 +133,8 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
         }
         const slotMin = h * 60 + m;
         const assigned = shifts.filter(s => {
-          let sStart = timeToMinutes(s.startTime.slice(0, 5));
-          let sEnd = timeToMinutes(s.endTime.slice(0, 5));
+          const sStart = timeToMinutes(s.startTime.slice(0, 5));
+          const sEnd = timeToMinutes(s.endTime.slice(0, 5));
           // 日跨ぎ: endTime < startTime なら翌日扱い
           if (sEnd <= sStart) {
             // 21:45-06:00 → 0:00-6:00の部分をカバーするかチェック
@@ -223,8 +223,8 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
         const required = req ? req.requiredCount : 0;
         const slotMin = h * 60 + m;
         const assigned = shifts.filter(s => {
-          let sStart = timeToMinutes(s.startTime.slice(0, 5));
-          let sEnd = timeToMinutes(s.endTime.slice(0, 5));
+          const sStart = timeToMinutes(s.startTime.slice(0, 5));
+          const sEnd = timeToMinutes(s.endTime.slice(0, 5));
           if (sEnd <= sStart) {
             if (slotMin >= sStart || slotMin + 30 <= sEnd) return true;
             return false;
