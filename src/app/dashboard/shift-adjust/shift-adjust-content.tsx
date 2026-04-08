@@ -1,9 +1,8 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { DashboardLayout, PageSection } from '@/components/layout/dashboard-layout';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
@@ -16,14 +15,24 @@ import { timeToMinutes } from '@/lib/time-constants';
 
 const DAY_NAMES = ['日', '月', '火', '水', '木', '金', '土'];
 const TOTAL_MINUTES = 24 * 60;
+const SNAP_MINUTES = 15; // 15分刻み
 const HOUR_LABELS = Array.from({ length: 24 }, (_, i) => i);
+
+function minToTime(m: number): string {
+  const normalized = ((m % TOTAL_MINUTES) + TOTAL_MINUTES) % TOTAL_MINUTES;
+  const h = Math.floor(normalized / 60);
+  const min = normalized % 60;
+  return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+}
+
+function snapToGrid(minutes: number): number {
+  return Math.round(minutes / SNAP_MINUTES) * SNAP_MINUTES;
+}
 
 function generateTimeOptions(): string[] {
   const opts: string[] = [];
   for (let h = 0; h < 24; h++) {
-    for (const m of [0, 15, 30, 45]) {
-      opts.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
-    }
+    for (const m of [0, 15, 30, 45]) opts.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
   }
   opts.push('24:00');
   return opts;
@@ -36,10 +45,169 @@ interface Shift {
   startTime: string; endTime: string;
   staffName: string | null; staffRole: string | null; staffEmploymentType: string | null;
 }
-interface Requirement {
-  id: number; storeId: number; dayOfWeek: number; timeSlot: string; requiredCount: number;
+interface Requirement { id: number; storeId: number; dayOfWeek: number; timeSlot: string; requiredCount: number; }
+
+// ===== ドラッグリサイズ可能なシフトバー =====
+function ResizableShiftBar({
+  shift, containerRef, isEmployee, isEditing,
+  onStartEdit, onUpdate, onDelete,
+}: {
+  shift: Shift; containerRef: React.RefObject<HTMLDivElement | null>;
+  isEmployee: boolean; isEditing: boolean;
+  onStartEdit: () => void;
+  onUpdate: (id: number, startTime: string, endTime: string) => void;
+  onDelete: (id: number) => void;
+}) {
+  const startMin = timeToMinutes(shift.startTime.slice(0, 5));
+  const endMin = timeToMinutes(shift.endTime.slice(0, 5));
+  const isOvernight = endMin <= startMin;
+
+  const [tempStart, setTempStart] = useState(startMin);
+  const [tempEnd, setTempEnd] = useState(isOvernight ? endMin + TOTAL_MINUTES : endMin);
+  const [dragging, setDragging] = useState<'left' | 'right' | null>(null);
+
+  // sync with prop changes
+  useEffect(() => {
+    const s = timeToMinutes(shift.startTime.slice(0, 5));
+    const e = timeToMinutes(shift.endTime.slice(0, 5));
+    setTempStart(s);
+    setTempEnd(e <= s ? e + TOTAL_MINUTES : e);
+  }, [shift.startTime, shift.endTime]);
+
+  const barColor = isEmployee ? 'bg-[#34C759]' : 'bg-[#007AFF]';
+
+  const handlePointerDown = useCallback((side: 'left' | 'right', e: React.PointerEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    setDragging(side);
+
+    const container = containerRef.current;
+    if (!container) return;
+
+    const containerRect = container.getBoundingClientRect();
+    const containerWidth = containerRect.width;
+    const startX = e.clientX;
+    const origStart = tempStart;
+    const origEnd = isOvernight ? endMin + TOTAL_MINUTES : endMin;
+
+    const handleMove = (ev: PointerEvent) => {
+      const dx = ev.clientX - startX;
+      const dMin = (dx / containerWidth) * TOTAL_MINUTES;
+
+      if (side === 'left') {
+        let newStart = snapToGrid(origStart + dMin);
+        newStart = Math.max(0, Math.min(newStart, origEnd - 30)); // 最短30分
+        setTempStart(newStart);
+      } else {
+        let newEnd = snapToGrid(origEnd + dMin);
+        newEnd = Math.max(origStart + 30, Math.min(newEnd, TOTAL_MINUTES + 6 * 60)); // 翌6時まで
+        setTempEnd(newEnd);
+      }
+    };
+
+    const handleUp = () => {
+      setDragging(null);
+      document.removeEventListener('pointermove', handleMove);
+      document.removeEventListener('pointerup', handleUp);
+
+      // 保存
+      const finalStart = side === 'left' ? snapToGrid(tempStart) : origStart;
+      const finalEnd = side === 'right' ? snapToGrid(isOvernight ? endMin + TOTAL_MINUTES : endMin) : origEnd;
+      // 再計算
+      const newStartRef = { current: finalStart };
+      const newEndRef = { current: finalEnd };
+
+      if (side === 'left') {
+        // tempStartから取得
+        // useStateは非同期なのでrefで管理
+      }
+
+      // setTimeout for state to settle
+      setTimeout(() => {
+        const s = side === 'left' ? tempStart : origStart;
+        const e = side === 'right' ? tempEnd : origEnd;
+        const startStr = minToTime(s);
+        const endStr = e >= TOTAL_MINUTES ? minToTime(e - TOTAL_MINUTES) : minToTime(e);
+        onUpdate(shift.id, startStr, endStr);
+      }, 0);
+    };
+
+    document.addEventListener('pointermove', handleMove);
+    document.addEventListener('pointerup', handleUp);
+  }, [containerRef, tempStart, tempEnd, shift.id, onUpdate, isOvernight, endMin]);
+
+  // 表示計算
+  const displayStart = tempStart;
+  const displayEnd = tempEnd;
+
+  // 通常シフト or 日跨ぎで分けて描画
+  if (displayEnd <= TOTAL_MINUTES) {
+    // 通常
+    const left = (displayStart / TOTAL_MINUTES) * 100;
+    const width = ((displayEnd - displayStart) / TOTAL_MINUTES) * 100;
+    const dur = displayEnd - displayStart;
+
+    return (
+      <div
+        className={`absolute top-0.5 bottom-0.5 rounded-md flex items-center ${barColor} ${isEditing ? 'ring-2 ring-[#FF9500] ring-offset-1' : ''} ${dragging ? 'opacity-80' : ''}`}
+        style={{ left: `${left}%`, width: `${width}%`, zIndex: dragging ? 20 : 10 }}
+      >
+        {/* 左ハンドル */}
+        <div className="absolute left-0 top-0 bottom-0 w-3 cursor-ew-resize z-20 touch-none flex items-center justify-center"
+          onPointerDown={e => handlePointerDown('left', e)}>
+          <div className="w-0.5 h-3 bg-white/60 rounded" />
+        </div>
+        {/* 中央 */}
+        <div className="flex-1 flex items-center justify-center min-w-0 cursor-pointer" onClick={onStartEdit}>
+          <span className="text-[10px] text-white font-medium truncate px-3">
+            {minToTime(displayStart)}-{displayEnd >= TOTAL_MINUTES ? minToTime(displayEnd - TOTAL_MINUTES) : minToTime(displayEnd)} ({Math.floor(dur / 60)}h{dur % 60 > 0 ? `${dur % 60}m` : ''})
+          </span>
+        </div>
+        {/* 右ハンドル */}
+        <div className="absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize z-20 touch-none flex items-center justify-center"
+          onPointerDown={e => handlePointerDown('right', e)}>
+          <div className="w-0.5 h-3 bg-white/60 rounded" />
+        </div>
+      </div>
+    );
+  } else {
+    // 日跨ぎ: 2本に分割
+    const left1 = (displayStart / TOTAL_MINUTES) * 100;
+    const width1 = ((TOTAL_MINUTES - displayStart) / TOTAL_MINUTES) * 100;
+    const actualEnd = displayEnd - TOTAL_MINUTES;
+    const width2 = (actualEnd / TOTAL_MINUTES) * 100;
+    const dur = displayEnd - displayStart;
+
+    return (
+      <>
+        <div className={`absolute top-0.5 bottom-0.5 rounded-l-md flex items-center ${barColor} ${isEditing ? 'ring-2 ring-[#FF9500]' : ''}`}
+          style={{ left: `${left1}%`, width: `${width1}%`, zIndex: dragging ? 20 : 10 }}>
+          <div className="absolute left-0 top-0 bottom-0 w-3 cursor-ew-resize z-20 touch-none flex items-center justify-center"
+            onPointerDown={e => handlePointerDown('left', e)}>
+            <div className="w-0.5 h-3 bg-white/60 rounded" />
+          </div>
+          <div className="flex-1 flex items-center justify-center cursor-pointer" onClick={onStartEdit}>
+            <span className="text-[10px] text-white font-medium truncate px-3">
+              {minToTime(displayStart)}-{minToTime(actualEnd)} ({Math.floor(dur / 60)}h{dur % 60 > 0 ? `${dur % 60}m` : ''})
+            </span>
+          </div>
+        </div>
+        {actualEnd > 0 && (
+          <div className={`absolute top-0.5 bottom-0.5 rounded-r-md ${barColor} ${isEditing ? 'ring-2 ring-[#FF9500]' : ''}`}
+            style={{ left: '0%', width: `${width2}%`, zIndex: dragging ? 20 : 10 }}>
+            <div className="absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize z-20 touch-none flex items-center justify-center"
+              onPointerDown={e => handlePointerDown('right', e)}>
+              <div className="w-0.5 h-3 bg-white/60 rounded" />
+            </div>
+          </div>
+        )}
+      </>
+    );
+  }
 }
 
+// ===== メインコンポーネント =====
 export function ShiftAdjustContent({ user }: { user: SessionUser }) {
   const getInitialDate = () => {
     if (typeof window !== 'undefined') {
@@ -58,49 +226,28 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
   const [requirements, setRequirements] = useState<Requirement[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // 追加フォーム
   const [showAddForm, setShowAddForm] = useState(false);
   const [addStartTime, setAddStartTime] = useState('09:00');
   const [addEndTime, setAddEndTime] = useState('17:00');
   const [saving, setSaving] = useState(false);
 
-  // 編集中のシフト
   const [editingShift, setEditingShift] = useState<Shift | null>(null);
-  const [editStartTime, setEditStartTime] = useState('');
-  const [editEndTime, setEditEndTime] = useState('');
+  const timelineRef = useRef<HTMLDivElement>(null);
 
-  const dateObj = useMemo(() => {
-    const [y, m, d] = currentDate.split('-').map(Number);
-    return new Date(y, m - 1, d);
-  }, [currentDate]);
+  const dateObj = useMemo(() => { const [y, m, d] = currentDate.split('-').map(Number); return new Date(y, m - 1, d); }, [currentDate]);
   const dayOfWeek = useMemo(() => dateObj.getDay(), [dateObj]);
-  const dateLabel = useMemo(() => {
-    const m = dateObj.getMonth() + 1;
-    const d = dateObj.getDate();
-    return `${m}/${d}（${DAY_NAMES[dayOfWeek]}）`;
-  }, [dateObj, dayOfWeek]);
-
+  const dateLabel = useMemo(() => `${dateObj.getMonth() + 1}/${dateObj.getDate()}（${DAY_NAMES[dayOfWeek]}）`, [dateObj, dayOfWeek]);
   const periodLabel = useMemo(() => {
-    const y = dateObj.getFullYear();
-    const month = dateObj.getMonth() + 1;
-    const day = dateObj.getDate();
+    const y = dateObj.getFullYear(); const month = dateObj.getMonth() + 1; const day = dateObj.getDate();
     const ms = String(month).padStart(2, '0');
     if (day <= 15) return `${ms}/01 〜 ${ms}/15`;
-    const lastDay = new Date(y, month, 0).getDate();
-    return `${ms}/16 〜 ${ms}/${lastDay}`;
+    return `${ms}/16 〜 ${ms}/${new Date(y, month, 0).getDate()}`;
   }, [dateObj]);
 
-  // データ取得
   useEffect(() => {
     (async () => {
-      try {
-        const res = await fetch('/api/stores');
-        if (res.ok) {
-          const data: Store[] = await res.json();
-          setStores(data);
-          const def = user.storeId ? data.find(s => s.id === user.storeId) : data[0];
-          if (def) setSelectedStoreId(String(def.id));
-        }
+      try { const res = await fetch('/api/stores'); if (res.ok) { const data: Store[] = await res.json(); setStores(data);
+        const def = user.storeId ? data.find(s => s.id === user.storeId) : data[0]; if (def) setSelectedStoreId(String(def.id)); }
       } catch { /* ignore */ }
     })();
   }, [user.storeId]);
@@ -109,231 +256,119 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
     if (!selectedStoreId || !currentDate) return;
     setLoading(true);
     try {
-      const [shiftsRes, reqsRes] = await Promise.all([
+      const [sRes, rRes] = await Promise.all([
         fetch(`/api/shifts?storeId=${selectedStoreId}&startDate=${currentDate}&endDate=${currentDate}`),
         fetch(`/api/shift-requirements?storeId=${selectedStoreId}&dayOfWeek=${dayOfWeek}`),
       ]);
-      if (shiftsRes.ok) setShifts(await shiftsRes.json());
-      if (reqsRes.ok) setRequirements(await reqsRes.json());
+      if (sRes.ok) setShifts(await sRes.json());
+      if (rRes.ok) setRequirements(await rRes.json());
     } catch { /* ignore */ }
     finally { setLoading(false); }
   }, [selectedStoreId, currentDate, dayOfWeek]);
 
   useEffect(() => { fetchDayData(); }, [fetchDayData]);
 
-  // 不足分析
   const gapMessages = useMemo(() => {
     if (requirements.length === 0) return [];
     const gaps: { startTime: string; endTime: string; shortage: number }[] = [];
-    let gapStart: string | null = null;
-    let gapShortage = 0;
-    for (let h = 0; h < 24; h++) {
-      for (const m of [0, 30]) {
-        const slot = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-        const req = requirements.find(r => r.timeSlot === slot);
-        const required = req ? req.requiredCount : 0;
-        if (required === 0) {
-          if (gapStart) { gaps.push({ startTime: gapStart, endTime: slot, shortage: gapShortage }); gapStart = null; }
-          continue;
-        }
-        const slotMin = h * 60 + m;
-        const assigned = shifts.filter(s => {
-          const sStart = timeToMinutes(s.startTime.slice(0, 5));
-          const sEnd = timeToMinutes(s.endTime.slice(0, 5));
-          if (sEnd <= sStart) return slotMin >= sStart || slotMin + 30 <= sEnd;
-          return sStart < slotMin + 30 && sEnd > slotMin;
-        }).length;
-        const shortage = required - assigned;
-        if (shortage > 0) {
-          if (gapStart && gapShortage === shortage) { /* continue */ }
-          else { if (gapStart) gaps.push({ startTime: gapStart, endTime: slot, shortage: gapShortage }); gapStart = slot; gapShortage = shortage; }
-        } else {
-          if (gapStart) { gaps.push({ startTime: gapStart, endTime: slot, shortage: gapShortage }); gapStart = null; }
-        }
-      }
-    }
+    let gapStart: string | null = null; let gapShortage = 0;
+    for (let h = 0; h < 24; h++) { for (const m of [0, 30]) {
+      const slot = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+      const req = requirements.find(r => r.timeSlot === slot); const required = req ? req.requiredCount : 0;
+      if (required === 0) { if (gapStart) { gaps.push({ startTime: gapStart, endTime: slot, shortage: gapShortage }); gapStart = null; } continue; }
+      const slotMin = h * 60 + m;
+      const assigned = shifts.filter(s => { const sS = timeToMinutes(s.startTime.slice(0, 5)); const sE = timeToMinutes(s.endTime.slice(0, 5));
+        if (sE <= sS) return slotMin >= sS || slotMin + 30 <= sE; return sS < slotMin + 30 && sE > slotMin; }).length;
+      const shortage = required - assigned;
+      if (shortage > 0) { if (gapStart && gapShortage === shortage) {} else { if (gapStart) gaps.push({ startTime: gapStart, endTime: slot, shortage: gapShortage }); gapStart = slot; gapShortage = shortage; } }
+      else { if (gapStart) { gaps.push({ startTime: gapStart, endTime: slot, shortage: gapShortage }); gapStart = null; } }
+    } }
     if (gapStart) gaps.push({ startTime: gapStart, endTime: '24:00', shortage: gapShortage });
     return gaps;
   }, [shifts, requirements]);
 
-  // ナビゲーション
   const navigateDay = useCallback((direction: number) => {
     const [y, m, d] = currentDate.split('-').map(Number);
     const date = new Date(y, m - 1, d + direction);
     const newDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-    setCurrentDate(newDate);
-    setShowAddForm(false);
-    setEditingShift(null);
+    setCurrentDate(newDate); setShowAddForm(false); setEditingShift(null);
     window.history.replaceState(null, '', `/dashboard/shift-adjust?date=${newDate}`);
   }, [currentDate]);
 
-  // 社員追加
   const handleAddShift = useCallback(async () => {
-    if (!user.id || !selectedStoreId) return;
-    setSaving(true);
+    if (!user.id || !selectedStoreId) return; setSaving(true);
     try {
-      const staffRes = await fetch(`/api/staff?storeId=${selectedStoreId}`);
-      const staffList = staffRes.ok ? await staffRes.json() : [];
-      let staffId = staffList.find((s: { name: string }) => s.name === user.name)?.id;
-      if (!staffId) {
-        const employee = staffList.find((s: { employmentType: string }) => s.employmentType === 'employee');
-        staffId = employee?.id || staffList[0]?.id;
-      }
+      const sRes = await fetch(`/api/staff?storeId=${selectedStoreId}`); const sList = sRes.ok ? await sRes.json() : [];
+      let staffId = sList.find((s: { name: string }) => s.name === user.name)?.id;
+      if (!staffId) { const emp = sList.find((s: { employmentType: string }) => s.employmentType === 'employee'); staffId = emp?.id || sList[0]?.id; }
       if (!staffId) { alert('スタッフ情報が見つかりません'); setSaving(false); return; }
-      const res = await fetch('/api/shifts', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ staffId, storeId: parseInt(selectedStoreId), date: currentDate, startTime: addStartTime, endTime: addEndTime }),
-      });
-      if (res.ok) { setShowAddForm(false); fetchDayData(); }
-      else { const err = await res.json(); alert(err.error || '登録に失敗しました'); }
-    } catch { alert('登録に失敗しました'); }
-    finally { setSaving(false); }
+      const res = await fetch('/api/shifts', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ staffId, storeId: parseInt(selectedStoreId), date: currentDate, startTime: addStartTime, endTime: addEndTime }) });
+      if (res.ok) { setShowAddForm(false); fetchDayData(); } else { const err = await res.json(); alert(err.error || '登録に失敗しました'); }
+    } catch { alert('登録に失敗しました'); } finally { setSaving(false); }
   }, [user, selectedStoreId, currentDate, addStartTime, addEndTime, fetchDayData]);
 
-  // シフト編集
-  const handleEditShift = useCallback(async () => {
-    if (!editingShift) return;
-    setSaving(true);
+  // ドラッグで時間変更 → API保存
+  const handleShiftUpdate = useCallback(async (shiftId: number, startTime: string, endTime: string) => {
     try {
-      const res = await fetch(`/api/shifts/${editingShift.id}`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ startTime: editStartTime, endTime: editEndTime }),
-      });
-      if (res.ok) { setEditingShift(null); fetchDayData(); }
-      else { const err = await res.json(); alert(err.error || '更新に失敗しました'); }
-    } catch { alert('更新に失敗しました'); }
-    finally { setSaving(false); }
-  }, [editingShift, editStartTime, editEndTime, fetchDayData]);
+      await fetch(`/api/shifts/${shiftId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ startTime, endTime }) });
+      fetchDayData();
+    } catch { /* ignore */ }
+  }, [fetchDayData]);
 
-  // シフト削除
   const handleDeleteShift = useCallback(async (shiftId: number) => {
     if (!confirm('このシフトを削除しますか？')) return;
-    try {
-      const res = await fetch(`/api/shifts/${shiftId}`, { method: 'DELETE' });
-      if (res.ok) { setEditingShift(null); fetchDayData(); }
-      else { alert('削除に失敗しました'); }
+    try { const res = await fetch(`/api/shifts/${shiftId}`, { method: 'DELETE' });
+      if (res.ok) { setEditingShift(null); fetchDayData(); } else alert('削除に失敗しました');
     } catch { alert('削除に失敗しました'); }
   }, [fetchDayData]);
 
-  // 編集開始
-  const startEditing = useCallback((shift: Shift) => {
-    setEditingShift(shift);
-    setEditStartTime(shift.startTime.slice(0, 5));
-    setEditEndTime(shift.endTime.slice(0, 5));
-    setShowAddForm(false);
-  }, []);
-
-  const activeShifts = useMemo(() =>
-    shifts.filter(s => s.staffName).sort((a, b) => {
-      let aStart = timeToMinutes(a.startTime.slice(0, 5));
-      let bStart = timeToMinutes(b.startTime.slice(0, 5));
-      if (aStart >= 21 * 60) aStart -= TOTAL_MINUTES;
-      if (bStart >= 21 * 60) bStart -= TOTAL_MINUTES;
-      return aStart - bStart;
-    }), [shifts]);
+  const activeShifts = useMemo(() => shifts.filter(s => s.staffName).sort((a, b) => {
+    let aS = timeToMinutes(a.startTime.slice(0, 5)); let bS = timeToMinutes(b.startTime.slice(0, 5));
+    if (aS >= 21 * 60) aS -= TOTAL_MINUTES; if (bS >= 21 * 60) bS -= TOTAL_MINUTES; return aS - bS;
+  }), [shifts]);
 
   const requirementBar = useMemo(() => {
     const slots: { time: string; required: number; assigned: number }[] = [];
-    for (let h = 0; h < 24; h++) {
-      for (const m of [0, 30]) {
-        const slot = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-        const req = requirements.find(r => r.timeSlot === slot);
-        const required = req ? req.requiredCount : 0;
-        const slotMin = h * 60 + m;
-        const assigned = shifts.filter(s => {
-          const sStart = timeToMinutes(s.startTime.slice(0, 5));
-          const sEnd = timeToMinutes(s.endTime.slice(0, 5));
-          if (sEnd <= sStart) return slotMin >= sStart || slotMin + 30 <= sEnd;
-          return sStart < slotMin + 30 && sEnd > slotMin;
-        }).length;
-        slots.push({ time: slot, required, assigned });
-      }
-    }
+    for (let h = 0; h < 24; h++) { for (const m of [0, 30]) {
+      const slot = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+      const req = requirements.find(r => r.timeSlot === slot); const required = req ? req.requiredCount : 0;
+      const slotMin = h * 60 + m;
+      const assigned = shifts.filter(s => { const sS = timeToMinutes(s.startTime.slice(0, 5)); const sE = timeToMinutes(s.endTime.slice(0, 5));
+        if (sE <= sS) return slotMin >= sS || slotMin + 30 <= sE; return sS < slotMin + 30 && sE > slotMin; }).length;
+      slots.push({ time: slot, required, assigned });
+    } }
     return slots;
   }, [shifts, requirements]);
 
-  const renderShiftBars = useCallback((shift: Shift) => {
-    const startMin = timeToMinutes(shift.startTime.slice(0, 5));
-    const endMin = timeToMinutes(shift.endTime.slice(0, 5));
-    const isEmployee = shift.staffEmploymentType === 'employee';
-    const barColor = isEmployee ? 'bg-[#34C759]' : 'bg-[#007AFF]';
-    const isEditing = editingShift?.id === shift.id;
-
-    if (endMin > startMin) {
-      const left = (startMin / TOTAL_MINUTES) * 100;
-      const width = ((endMin - startMin) / TOTAL_MINUTES) * 100;
-      const dur = endMin - startMin;
-      return (
-        <div key={shift.id}
-          className={`absolute top-0.5 bottom-0.5 rounded-md flex items-center justify-center cursor-pointer transition-all ${barColor} ${isEditing ? 'ring-2 ring-[#FF9500] ring-offset-1' : 'hover:brightness-110'}`}
-          style={{ left: `${left}%`, width: `${width}%` }}
-          onClick={() => startEditing(shift)}>
-          <span className="text-[10px] text-white font-medium truncate px-1">
-            {shift.startTime.slice(0, 5)}-{shift.endTime.slice(0, 5)} ({Math.floor(dur / 60)}h{dur % 60 > 0 ? `${dur % 60}m` : ''})
-          </span>
-        </div>
-      );
-    } else {
-      const dur = (TOTAL_MINUTES - startMin) + endMin;
-      const label = `${shift.startTime.slice(0, 5)}-${shift.endTime.slice(0, 5)} (${Math.floor(dur / 60)}h${dur % 60 > 0 ? `${dur % 60}m` : ''})`;
-      const left1 = (startMin / TOTAL_MINUTES) * 100;
-      const width1 = ((TOTAL_MINUTES - startMin) / TOTAL_MINUTES) * 100;
-      const width2 = (endMin / TOTAL_MINUTES) * 100;
-      return (
-        <>
-          <div key={`${shift.id}-a`}
-            className={`absolute top-0.5 bottom-0.5 rounded-l-md flex items-center justify-end cursor-pointer ${barColor} ${isEditing ? 'ring-2 ring-[#FF9500]' : 'hover:brightness-110'}`}
-            style={{ left: `${left1}%`, width: `${width1}%` }}
-            onClick={() => startEditing(shift)}>
-            <span className="text-[10px] text-white font-medium truncate px-1">{label}</span>
-          </div>
-          {endMin > 0 && (
-            <div key={`${shift.id}-b`}
-              className={`absolute top-0.5 bottom-0.5 rounded-r-md cursor-pointer ${barColor} ${isEditing ? 'ring-2 ring-[#FF9500]' : 'hover:brightness-110'}`}
-              style={{ left: '0%', width: `${width2}%` }}
-              onClick={() => startEditing(shift)} />
-          )}
-        </>
-      );
-    }
-  }, [editingShift, startEditing]);
-
   return (
-    <DashboardLayout user={user} title="シフト微調整" description="1日ずつ確認・シフトの追加・編集・削除"
+    <DashboardLayout user={user} title="シフト微調整" description="バーの端をドラッグして時間を調整"
       actions={stores.length > 1 ? (
         <Select value={selectedStoreId} onValueChange={setSelectedStoreId}>
           <SelectTrigger className="w-[180px] border-[#E5E5EA] bg-white"><SelectValue placeholder="店舗を選択" /></SelectTrigger>
           <SelectContent>{stores.map(s => <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>)}</SelectContent>
         </Select>
-      ) : undefined}
-    >
+      ) : undefined}>
+
       {/* 日付ナビ */}
       <div className="flex items-center justify-between mb-4">
-        <Button variant="outline" onClick={() => navigateDay(-1)} className="rounded-xl h-12 w-12">
-          <ChevronLeft className="w-6 h-6" />
-        </Button>
+        <Button variant="outline" onClick={() => navigateDay(-1)} className="rounded-xl h-12 w-12"><ChevronLeft className="w-6 h-6" /></Button>
         <div className="text-center">
-          <h2 className={`text-2xl font-bold ${dayOfWeek === 0 ? 'text-[#FF3B30]' : dayOfWeek === 6 ? 'text-[#007AFF]' : 'text-[#1D1D1F]'}`}>
-            {dateLabel}
-          </h2>
+          <h2 className={`text-2xl font-bold ${dayOfWeek === 0 ? 'text-[#FF3B30]' : dayOfWeek === 6 ? 'text-[#007AFF]' : 'text-[#1D1D1F]'}`}>{dateLabel}</h2>
           <p className="text-xs text-[#86868B]">期間: {periodLabel}</p>
         </div>
-        <Button variant="outline" onClick={() => navigateDay(1)} className="rounded-xl h-12 w-12">
-          <ChevronRight className="w-6 h-6" />
-        </Button>
+        <Button variant="outline" onClick={() => navigateDay(1)} className="rounded-xl h-12 w-12"><ChevronRight className="w-6 h-6" /></Button>
       </div>
 
       {loading ? (
         <PageSection><div className="animate-pulse space-y-4">{[...Array(5)].map((_, i) => <div key={i} className="h-12 bg-[#E5E5EA] rounded-xl" />)}</div></PageSection>
       ) : (
         <>
-          {/* 不足メッセージ */}
           {gapMessages.length > 0 ? (
             <div className="bg-[#FF3B30]/5 border border-[#FF3B30]/20 rounded-2xl p-4 mb-4">
               <h3 className="text-sm font-bold text-[#FF3B30] mb-2 flex items-center gap-1.5"><AlertTriangle className="w-4 h-4" />人手が足りない時間帯</h3>
-              <div className="space-y-1">
-                {gapMessages.map((g, i) => <p key={i} className="text-sm text-[#FF3B30]">{g.startTime}〜{g.endTime} あと{g.shortage}人</p>)}
-              </div>
+              {gapMessages.map((g, i) => <p key={i} className="text-sm text-[#FF3B30]">{g.startTime}〜{g.endTime} あと{g.shortage}人</p>)}
             </div>
           ) : requirements.length > 0 ? (
             <div className="bg-[#34C759]/5 border border-[#34C759]/20 rounded-2xl p-4 mb-4">
@@ -341,13 +376,11 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
             </div>
           ) : null}
 
-          {/* タイムライン */}
           <PageSection className="overflow-x-auto">
             <div className="min-w-[700px]">
               <div className="flex items-end mb-1" style={{ marginLeft: '110px' }}>
                 {HOUR_LABELS.map(h => (
-                  <div key={h} className="text-[9px] text-[#86868B] border-l border-[#E5E5EA]/50"
-                    style={{ width: `${(1 / 24) * 100}%`, paddingLeft: '2px' }}>{String(h).padStart(2, '0')}</div>
+                  <div key={h} className="text-[9px] text-[#86868B] border-l border-[#E5E5EA]/50" style={{ width: `${(1 / 24) * 100}%`, paddingLeft: '2px' }}>{String(h).padStart(2, '0')}</div>
                 ))}
               </div>
 
@@ -355,15 +388,11 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
                 <div className="w-[110px] flex-shrink-0 pr-2"><span className="text-[10px] text-[#86868B]">必要人数</span></div>
                 <div className="flex-1 flex h-5 rounded-md overflow-hidden bg-[#F5F5F7]">
                   {requirementBar.map((slot, i) => {
-                    const isFull = slot.assigned >= slot.required;
-                    const isEmpty = slot.required === 0;
+                    const isFull = slot.assigned >= slot.required; const isEmpty = slot.required === 0;
                     return (
                       <div key={i} className={`h-full flex items-center justify-center ${isEmpty ? 'bg-[#F5F5F7]' : isFull ? 'bg-[#34C759]/30' : 'bg-[#FF3B30]/20'}`}
-                        style={{ width: `${(1 / 48) * 100}%`, borderRight: i % 2 === 1 ? '1px solid rgba(0,0,0,0.05)' : 'none' }}
-                        title={`${slot.time}: ${slot.assigned}/${slot.required}人`}>
-                        {i % 2 === 0 && slot.required > 0 && (
-                          <span className={`text-[7px] font-bold ${isFull ? 'text-[#34C759]' : 'text-[#FF3B30]'}`}>{slot.assigned}/{slot.required}</span>
-                        )}
+                        style={{ width: `${(1 / 48) * 100}%`, borderRight: i % 2 === 1 ? '1px solid rgba(0,0,0,0.05)' : 'none' }}>
+                        {i % 2 === 0 && slot.required > 0 && <span className={`text-[7px] font-bold ${isFull ? 'text-[#34C759]' : 'text-[#FF3B30]'}`}>{slot.assigned}/{slot.required}</span>}
                       </div>
                     );
                   })}
@@ -378,8 +407,16 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
                         <p className="text-sm font-medium text-[#1D1D1F] truncate">{shift.staffName}</p>
                         <p className="text-[10px] text-[#86868B]">{shift.staffEmploymentType === 'employee' ? '社員' : 'バイト'}</p>
                       </div>
-                      <div className="flex-1 relative h-8 bg-[#F5F5F7] rounded-md">
-                        {renderShiftBars(shift)}
+                      <div ref={timelineRef} className="flex-1 relative h-9 bg-[#F5F5F7] rounded-md">
+                        <ResizableShiftBar
+                          shift={shift}
+                          containerRef={timelineRef}
+                          isEmployee={shift.staffEmploymentType === 'employee'}
+                          isEditing={editingShift?.id === shift.id}
+                          onStartEdit={() => { setEditingShift(shift); setShowAddForm(false); }}
+                          onUpdate={handleShiftUpdate}
+                          onDelete={handleDeleteShift}
+                        />
                       </div>
                     </div>
                   ))}
@@ -387,52 +424,22 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
               ) : (
                 <p className="text-sm text-[#D2D2D7] text-center py-6">この日はシフトが登録されていません</p>
               )}
-
-              <p className="text-[10px] text-[#86868B] mt-2">※ シフトバーをタップで編集・削除</p>
+              <p className="text-[10px] text-[#86868B] mt-2">※ バーの端をドラッグで時間調整 / 中央タップで削除</p>
             </div>
           </PageSection>
 
-          {/* シフト編集フォーム */}
+          {/* 選択中シフトの削除 */}
           {editingShift && (
-            <PageSection className="mt-4">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-bold text-[#1D1D1F] flex items-center gap-1.5">
-                  <Pencil className="w-4 h-4 text-[#FF9500]" />
-                  {editingShift.staffName} のシフトを編集
-                </h3>
-                <Button variant="ghost" size="sm" onClick={() => setEditingShift(null)} className="h-8 w-8 p-0">
-                  <X className="w-4 h-4" />
-                </Button>
-              </div>
-
-              <div className="flex items-center gap-3 mb-4">
-                <div className="flex-1">
-                  <label className="text-xs text-[#86868B] mb-1 block">開始</label>
-                  <Select value={editStartTime} onValueChange={setEditStartTime}>
-                    <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
-                    <SelectContent>{TIME_OPTIONS.filter(t => t !== '24:00').map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
-                  </Select>
-                </div>
-                <div className="pt-4 text-[#86868B]">〜</div>
-                <div className="flex-1">
-                  <label className="text-xs text-[#86868B] mb-1 block">終了</label>
-                  <Select value={editEndTime} onValueChange={setEditEndTime}>
-                    <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
-                    <SelectContent>{TIME_OPTIONS.filter(t => t !== '00:00').map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
-                  </Select>
-                </div>
-              </div>
-
+            <div className="mt-3 flex items-center justify-between bg-[#FF9500]/5 border border-[#FF9500]/20 rounded-xl p-3">
+              <span className="text-sm text-[#1D1D1F]"><strong>{editingShift.staffName}</strong> {editingShift.startTime.slice(0, 5)}-{editingShift.endTime.slice(0, 5)}</span>
               <div className="flex gap-2">
-                <Button onClick={handleEditShift} disabled={saving} className="flex-1 bg-[#FF9500] hover:bg-[#E68600] text-white rounded-xl">
-                  {saving ? '保存中...' : '時間を変更'}
+                <Button size="sm" variant="outline" onClick={() => handleDeleteShift(editingShift.id)}
+                  className="rounded-lg border-[#FF3B30] text-[#FF3B30] hover:bg-[#FF3B30]/5">
+                  <Trash2 className="w-3.5 h-3.5 mr-1" />削除
                 </Button>
-                <Button onClick={() => handleDeleteShift(editingShift.id)} variant="outline"
-                  className="rounded-xl border-[#FF3B30] text-[#FF3B30] hover:bg-[#FF3B30]/5">
-                  <Trash2 className="w-4 h-4 mr-1" />削除
-                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setEditingShift(null)} className="rounded-lg"><X className="w-4 h-4" /></Button>
               </div>
-            </PageSection>
+            </div>
           )}
 
           {/* 社員追加 */}
@@ -445,12 +452,8 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
             ) : (
               <PageSection>
                 <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-sm font-bold text-[#1D1D1F] flex items-center gap-1.5">
-                    <Pencil className="w-4 h-4 text-[#007AFF]" />シフトを追加（{user.name}）
-                  </h3>
-                  <Button variant="ghost" size="sm" onClick={() => setShowAddForm(false)} className="h-8 w-8 p-0">
-                    <X className="w-4 h-4" />
-                  </Button>
+                  <h3 className="text-sm font-bold text-[#1D1D1F] flex items-center gap-1.5"><Pencil className="w-4 h-4 text-[#007AFF]" />シフトを追加（{user.name}）</h3>
+                  <Button variant="ghost" size="sm" onClick={() => setShowAddForm(false)} className="h-8 w-8 p-0"><X className="w-4 h-4" /></Button>
                 </div>
                 <div className="flex items-center gap-3 mb-4">
                   <div className="flex-1">
@@ -469,7 +472,6 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
                     </Select>
                   </div>
                 </div>
-
                 {gapMessages.length > 0 && (
                   <div className="mb-4">
                     <p className="text-xs text-[#86868B] mb-2">不足時間帯をタップで選択:</p>
@@ -483,18 +485,14 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
                     </div>
                   </div>
                 )}
-
                 <div className="flex gap-2">
-                  <Button onClick={handleAddShift} disabled={saving} className="flex-1 bg-[#34C759] hover:bg-[#2DB84E] text-white rounded-xl">
-                    {saving ? '登録中...' : '登録する'}
-                  </Button>
+                  <Button onClick={handleAddShift} disabled={saving} className="flex-1 bg-[#34C759] hover:bg-[#2DB84E] text-white rounded-xl">{saving ? '登録中...' : '登録する'}</Button>
                   <Button variant="outline" onClick={() => setShowAddForm(false)} className="rounded-xl">キャンセル</Button>
                 </div>
               </PageSection>
             )}
           </div>
 
-          {/* 次の日ボタン */}
           <div className="mt-4 mb-8">
             <Button onClick={() => navigateDay(1)} className="w-full rounded-xl h-14 text-lg bg-[#007AFF] hover:bg-[#0056CC] text-white">
               次の日へ <ChevronRight className="w-5 h-5 ml-1" />
