@@ -49,32 +49,30 @@ interface Requirement { id: number; storeId: number; dayOfWeek: number; timeSlot
 
 // ===== ドラッグリサイズ可能なシフトバー =====
 function ResizableShiftBar({
-  shift, containerRef, isEmployee, isEditing,
+  shift, isEmployee, isEditing,
   onStartEdit, onUpdate,
 }: {
-  shift: Shift; containerRef: React.RefObject<HTMLDivElement | null>;
+  shift: Shift;
   isEmployee: boolean; isEditing: boolean;
   onStartEdit: () => void;
   onUpdate: (id: number, startTime: string, endTime: string) => void;
 }) {
+  const barRef = useRef<HTMLDivElement>(null);
   const startMin = timeToMinutes(shift.startTime.slice(0, 5));
   const endMin = timeToMinutes(shift.endTime.slice(0, 5));
   const isOvernight = endMin <= startMin;
 
-  // ドラッグ中の一時値をstateで管理
   const initEnd = isOvernight ? endMin + TOTAL_MINUTES : endMin;
   const [tempStart, setTempStart] = useState(startMin);
   const [tempEnd, setTempEnd] = useState(initEnd);
   const [dragging, setDragging] = useState<'left' | 'right' | null>(null);
 
-  // ドラッグ中でないときはprop値を使う（prop変更に追従）
   const displayStart = dragging ? tempStart : startMin;
   const displayEnd = dragging ? tempEnd : initEnd;
 
-  // refでドラッグ中の最新値を保持（handleUp時に参照）
   const tempStartRef = useRef(startMin);
   const tempEndRef = useRef(initEnd);
-  // eslint-disable-next-line react-hooks/set-state-in-effect -- ref同期はeffect内で安全
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- ref sync
   useEffect(() => { tempStartRef.current = displayStart; tempEndRef.current = displayEnd; }, [displayStart, displayEnd]);
 
   const barColor = isEmployee ? 'bg-[#34C759]' : 'bg-[#007AFF]';
@@ -85,7 +83,8 @@ function ResizableShiftBar({
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     setDragging(side);
 
-    const container = containerRef.current;
+    // 親要素（relative containerのdiv）から幅を取得
+    const container = barRef.current?.parentElement;
     if (!container) return;
 
     const containerWidth = container.getBoundingClientRect().width;
@@ -124,7 +123,7 @@ function ResizableShiftBar({
 
     document.addEventListener('pointermove', handleMove);
     document.addEventListener('pointerup', handleUp);
-  }, [containerRef, shift.id, onUpdate]);
+  }, [shift.id, onUpdate]);
 
   // 通常シフト or 日跨ぎで分けて描画
   if (displayEnd <= TOTAL_MINUTES) {
@@ -134,7 +133,7 @@ function ResizableShiftBar({
     const dur = displayEnd - displayStart;
 
     return (
-      <div
+      <div ref={barRef}
         className={`absolute top-0.5 bottom-0.5 rounded-md flex items-center ${barColor} ${isEditing ? 'ring-2 ring-[#FF9500] ring-offset-1' : ''} ${dragging ? 'opacity-80' : ''}`}
         style={{ left: `${left}%`, width: `${width}%`, zIndex: dragging ? 20 : 10 }}
       >
@@ -217,7 +216,6 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
   const [saving, setSaving] = useState(false);
 
   const [editingShift, setEditingShift] = useState<Shift | null>(null);
-  const timelineRef = useRef<HTMLDivElement>(null);
 
   const dateObj = useMemo(() => { const [y, m, d] = currentDate.split('-').map(Number); return new Date(y, m - 1, d); }, [currentDate]);
   const dayOfWeek = useMemo(() => dateObj.getDay(), [dateObj]);
@@ -392,10 +390,9 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
                         <p className="text-sm font-medium text-[#1D1D1F] truncate">{shift.staffName}</p>
                         <p className="text-[10px] text-[#86868B]">{shift.staffEmploymentType === 'employee' ? '社員' : 'バイト'}</p>
                       </div>
-                      <div ref={timelineRef} className="flex-1 relative h-9 bg-[#F5F5F7] rounded-md">
+                      <div className="flex-1 relative h-9 bg-[#F5F5F7] rounded-md">
                         <ResizableShiftBar
                           shift={shift}
-                          containerRef={timelineRef}
                           isEmployee={shift.staffEmploymentType === 'employee'}
                           isEditing={editingShift?.id === shift.id}
                           onStartEdit={() => { setEditingShift(shift); setShowAddForm(false); }}
