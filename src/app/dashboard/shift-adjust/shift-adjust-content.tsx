@@ -65,7 +65,10 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
   const [addEndTime, setAddEndTime] = useState('17:00');
   const [saving, setSaving] = useState(false);
 
-  const dateObj = useMemo(() => new Date(currentDate + 'T00:00:00'), [currentDate]);
+  const dateObj = useMemo(() => {
+    const [y, m, d] = currentDate.split('-').map(Number);
+    return new Date(y, m - 1, d);
+  }, [currentDate]);
   const dayOfWeek = useMemo(() => dateObj.getDay(), [dateObj]);
   const dateLabel = useMemo(() => {
     const m = dateObj.getMonth() + 1;
@@ -161,14 +164,13 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
     return gaps;
   }, [shifts, requirements]);
 
-  // ナビゲーション
+  // ナビゲーション（タイムゾーン問題を回避するためローカル日付で計算）
   const navigateDay = useCallback((direction: number) => {
-    const d = new Date(currentDate + 'T00:00:00');
-    d.setDate(d.getDate() + direction);
-    const newDate = d.toISOString().slice(0, 10);
+    const [y, m, d] = currentDate.split('-').map(Number);
+    const date = new Date(y, m - 1, d + direction);
+    const newDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
     setCurrentDate(newDate);
     setShowAddForm(false);
-    // URLも更新（リロードなし）
     window.history.replaceState(null, '', `/dashboard/shift-adjust?date=${newDate}`);
   }, [currentDate]);
 
