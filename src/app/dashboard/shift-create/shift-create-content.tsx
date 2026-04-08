@@ -135,24 +135,31 @@ export function ShiftCreateContent({ user }: { user: SessionUser }) {
 
     setStep('saving');
 
-    // === PHASE 1: 未登録スタッフをDBに自動登録 ===
-    setSaveProgress({ total: 0, done: 0, errors: 0, phase: 'スタッフを登録中...' });
+    // === PHASE 1: スタッフ登録（最新のDB一覧を再取得して重複防止） ===
+    setSaveProgress({ total: 0, done: 0, errors: 0, phase: 'スタッフを確認中...' });
 
-    const staffMap = new Map<string, number>(); // name → staffId
+    // 最新のスタッフ一覧をDB再取得（2回目実行時の重複防止）
+    let latestStaff: DbStaff[] = dbStaff;
+    try {
+      const res = await fetch(`/api/staff?storeId=${storeId}`);
+      if (res.ok) latestStaff = await res.json();
+    } catch { /* fallback to cached */ }
 
-    // 既存DBスタッフとマッチング
+    const staffMap = new Map<string, number>();
+
+    // 既存スタッフとマッチング
     for (const parsed of activeStaff) {
       const normalizedName = parsed.name.replace(/\s+/g, '');
-      const exact = dbStaff.find(s => s.name.replace(/\s+/g, '') === normalizedName);
+      const exact = latestStaff.find(s => s.name.replace(/\s+/g, '') === normalizedName);
       if (exact) { staffMap.set(parsed.name, exact.id); continue; }
-      const partial = dbStaff.find(s =>
+      const partial = latestStaff.find(s =>
         s.name.replace(/\s+/g, '').includes(normalizedName) ||
         normalizedName.includes(s.name.replace(/\s+/g, ''))
       );
       if (partial) { staffMap.set(parsed.name, partial.id); }
     }
 
-    // 未登録スタッフを自動登録
+    // 未登録のみ新規登録
     const unmatched = activeStaff.filter(s => !staffMap.has(s.name));
     for (const staff of unmatched) {
       try {
@@ -160,13 +167,9 @@ export function ShiftCreateContent({ user }: { user: SessionUser }) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            storeId,
-            name: staff.name,
-            employmentType: 'part_time',
-            hourlyRate: 1000,
-            joinedAt: new Date().toISOString().slice(0, 10),
-            skillLevel: 1,
-            role: 'staff',
+            storeId, name: staff.name, employmentType: 'part_time',
+            hourlyRate: 1000, joinedAt: new Date().toISOString().slice(0, 10),
+            skillLevel: 1, role: 'staff',
           }),
         });
         if (res.ok) {
@@ -178,12 +181,40 @@ export function ShiftCreateContent({ user }: { user: SessionUser }) {
 
     setRegisteredStaffMap(staffMap);
 
-    // === PHASE 2: シフト登録 ===
+    // === PHASE 2: 既存シフト取得（重複チェック用） ===
+    setSaveProgress({ total: 0, done: 0, errors: 0, phase: '既存シフトを確認中...' });
+
+    const startDay = parseResult.period.half === 'first' ? '01' : '16';
+    const daysInMonth = new Date(year, month, 0).getDate();
+    const endDay = parseResult.period.half === 'first' ? '15' : String(daysInMonth);
+    const periodStartDate = `${year}-${String(month).padStart(2, '0')}-${startDay}`;
+    const periodEndDate = `${year}-${String(month).padStart(2, '0')}-${endDay}`;
+
+    let existingShifts: { staffId: number; date: string; startTime: string; endTime: string }[] = [];
+    try {
+      const res = await fetch(`/api/shifts?storeId=${storeId}&startDate=${periodStartDate}&endDate=${periodEndDate}`);
+      if (res.ok) {
+        const data = await res.json();
+        existingShifts = data.map((s: { staffId: number; date: string; startTime: string; endTime: string }) => ({
+          staffId: s.staffId, date: s.date, startTime: s.startTime.slice(0, 5), endTime: s.endTime.slice(0, 5),
+        }));
+      }
+    } catch { /* continue */ }
+
+    // === PHASE 3: シフト登録（重複スキップ） ===
     const shiftsToSave: { staffId: number; date: string; startTime: string; endTime: string }[] = [];
     for (const shift of assignResult.shifts) {
       const staffId = staffMap.get(shift.staffName);
       if (!staffId) continue;
       const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(shift.day).padStart(2, '0')}`;
+
+      // 重複チェック: 同じスタッフ・同じ日・同じ時間のシフトが既にあればスキップ
+      const isDuplicate = existingShifts.some(e =>
+        e.staffId === staffId && e.date === dateStr &&
+        e.startTime === shift.startTime && e.endTime === shift.endTime
+      );
+      if (isDuplicate) continue;
+
       shiftsToSave.push({ staffId, date: dateStr, startTime: shift.startTime, endTime: shift.endTime });
     }
 
