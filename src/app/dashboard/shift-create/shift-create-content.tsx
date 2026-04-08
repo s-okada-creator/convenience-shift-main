@@ -451,14 +451,20 @@ export function ShiftCreateContent({ user }: { user: SessionUser }) {
               <p className="text-sm text-[#FF9500] mb-4">{saveProgress.errors}件がエラーで登録できませんでした</p>
             )}
             <p className="text-sm text-[#86868B] mb-8">
-              シフト管理画面で確認・社員の追加ができます
+              次は「シフト微調整」で社員のシフトを追加してください
             </p>
-            <div className="flex gap-3 justify-center">
+            <div className="flex flex-col sm:flex-row gap-3 justify-center">
               <Button
-                onClick={() => router.push('/dashboard/shifts')}
+                onClick={() => {
+                  // 登録した期間の初日に飛ぶ
+                  const startDay = parseResult?.period.half === 'first' ? '01' : '16';
+                  const m = String(parseResult?.period.month || 1).padStart(2, '0');
+                  const y = parseResult?.period.year || new Date().getFullYear();
+                  router.push(`/dashboard/shift-adjust?date=${y}-${m}-${startDay}`);
+                }}
                 className="bg-[#007AFF] hover:bg-[#0056CC] text-white rounded-xl px-6"
               >
-                <Calendar className="w-4 h-4 mr-2" />シフト管理を開く
+                <Calendar className="w-4 h-4 mr-2" />シフト微調整を開く
               </Button>
               <Button variant="outline" onClick={resetAll} className="rounded-xl">
                 続けて作成

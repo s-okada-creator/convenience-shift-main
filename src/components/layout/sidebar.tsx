@@ -11,6 +11,7 @@ import {
   Megaphone,
   HandHeart,
   Sparkles,
+  Pencil,
   LogOut,
   ChevronRight,
   Plus,
@@ -53,6 +54,13 @@ const navItems: NavItem[] = [
     icon: Sparkles,
     roles: ['owner', 'manager'],
     description: 'LINEから自動生成',
+  },
+  {
+    href: '/dashboard/shift-adjust',
+    label: 'シフト微調整',
+    icon: Pencil,
+    roles: ['owner', 'manager'],
+    description: '1日ずつ確認・社員追加',
   },
   {
     href: '/dashboard/staff',
