@@ -5,29 +5,33 @@ import { DashboardLayout, PageSection } from '@/components/layout/dashboard-layo
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import {
-  ChevronLeft,
-  ChevronRight,
-  CheckCircle2,
-  AlertTriangle,
-  UserPlus,
-  Clock,
-  Pencil,
+  ChevronLeft, ChevronRight, CheckCircle2, AlertTriangle,
+  UserPlus, Pencil,
 } from 'lucide-react';
 import type { SessionUser } from '@/lib/auth';
 import { timeToMinutes } from '@/lib/time-constants';
 
 const DAY_NAMES = ['日', '月', '火', '水', '木', '金', '土'];
-
-// 時間軸のヘッダー（3時間刻み表示用）
-const HOUR_LABELS = [0, 3, 6, 9, 12, 15, 18, 21];
 const TOTAL_MINUTES = 24 * 60;
+
+// 1時間刻みの時間軸ラベル
+const HOUR_LABELS = Array.from({ length: 24 }, (_, i) => i);
+
+// 15分刻みの時間選択肢
+function generateTimeOptions(): string[] {
+  const opts: string[] = [];
+  for (let h = 0; h < 24; h++) {
+    for (const m of [0, 15, 30, 45]) {
+      opts.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+    }
+  }
+  opts.push('24:00');
+  return opts;
+}
+const TIME_OPTIONS = generateTimeOptions();
 
 interface Store { id: number; name: string; }
 interface Shift {
@@ -40,54 +44,47 @@ interface Requirement {
 }
 
 export function ShiftAdjustContent({ user }: { user: SessionUser }) {
-  // 日付管理
-  const [currentDate, setCurrentDate] = useState(() => {
-    const params = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
-    return params.get('date') || new Date().toISOString().slice(0, 10);
-  });
-  const [periodStart, setPeriodStart] = useState('');
-  const [periodEnd, setPeriodEnd] = useState('');
+  const getInitialDate = () => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const d = params.get('date');
+      if (d) return d;
+    }
+    return new Date().toISOString().slice(0, 10);
+  };
 
-  // データ
+  const [currentDate, setCurrentDate] = useState(getInitialDate);
   const [stores, setStores] = useState<Store[]>([]);
   const [selectedStoreId, setSelectedStoreId] = useState('');
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [requirements, setRequirements] = useState<Requirement[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // 社員追加
   const [showAddForm, setShowAddForm] = useState(false);
   const [addStartTime, setAddStartTime] = useState('09:00');
   const [addEndTime, setAddEndTime] = useState('17:00');
   const [saving, setSaving] = useState(false);
 
-  // 現在日の情報
   const dateObj = useMemo(() => new Date(currentDate + 'T00:00:00'), [currentDate]);
   const dayOfWeek = useMemo(() => dateObj.getDay(), [dateObj]);
   const dateLabel = useMemo(() => {
     const m = dateObj.getMonth() + 1;
     const d = dateObj.getDate();
-    const dow = DAY_NAMES[dayOfWeek];
-    return `${m}/${d}（${dow}）`;
+    return `${m}/${d}（${DAY_NAMES[dayOfWeek]}）`;
   }, [dateObj, dayOfWeek]);
 
-  // 期間の初期化（前半: 1-15、後半: 16-末日）
-  useEffect(() => {
-    const d = new Date(currentDate + 'T00:00:00');
-    const year = d.getFullYear();
-    const month = d.getMonth();
+  // 期間表示
+  const periodLabel = useMemo(() => {
+    const d = dateObj;
+    const y = d.getFullYear();
+    const month = d.getMonth() + 1;
     const day = d.getDate();
-    if (day <= 15) {
-      setPeriodStart(`${year}-${String(month + 1).padStart(2, '0')}-01`);
-      setPeriodEnd(`${year}-${String(month + 1).padStart(2, '0')}-15`);
-    } else {
-      const lastDay = new Date(year, month + 1, 0).getDate();
-      setPeriodStart(`${year}-${String(month + 1).padStart(2, '0')}-16`);
-      setPeriodEnd(`${year}-${String(month + 1).padStart(2, '0')}-${lastDay}`);
-    }
-  }, [currentDate]);
+    if (day <= 15) return `${String(month).padStart(2, '0')}/01 〜 ${String(month).padStart(2, '0')}/15`;
+    const lastDay = new Date(y, month, 0).getDate();
+    return `${String(month).padStart(2, '0')}/16 〜 ${String(month).padStart(2, '0')}/${lastDay}`;
+  }, [dateObj]);
 
-  // --- データ取得 ---
+  // データ取得
   useEffect(() => {
     (async () => {
       try {
@@ -118,14 +115,12 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
 
   useEffect(() => { fetchDayData(); }, [fetchDayData]);
 
-  // --- 不足分析 ---
+  // 不足分析
   const gapMessages = useMemo(() => {
     if (requirements.length === 0) return [];
-
-    // 30分スロットごとに配置人数 vs 必要人数をチェック
     const gaps: { startTime: string; endTime: string; shortage: number }[] = [];
-    let currentGapStart: string | null = null;
-    let currentShortage = 0;
+    let gapStart: string | null = null;
+    let gapShortage = 0;
 
     for (let h = 0; h < 24; h++) {
       for (const m of [0, 30]) {
@@ -133,107 +128,92 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
         const req = requirements.find(r => r.timeSlot === slot);
         const required = req ? req.requiredCount : 0;
         if (required === 0) {
-          if (currentGapStart) {
-            gaps.push({ startTime: currentGapStart, endTime: slot, shortage: currentShortage });
-            currentGapStart = null;
-          }
+          if (gapStart) { gaps.push({ startTime: gapStart, endTime: slot, shortage: gapShortage }); gapStart = null; }
           continue;
         }
-
         const slotMin = h * 60 + m;
-        const slotEnd = slotMin + 30;
         const assigned = shifts.filter(s => {
-          const sStart = timeToMinutes(s.startTime.slice(0, 5));
-          const sEnd = timeToMinutes(s.endTime.slice(0, 5));
-          return sStart < slotEnd && sEnd > slotMin;
+          let sStart = timeToMinutes(s.startTime.slice(0, 5));
+          let sEnd = timeToMinutes(s.endTime.slice(0, 5));
+          // 日跨ぎ: endTime < startTime なら翌日扱い
+          if (sEnd <= sStart) {
+            // 21:45-06:00 → 0:00-6:00の部分をカバーするかチェック
+            if (slotMin >= sStart || slotMin + 30 <= sEnd) return true;
+            return false;
+          }
+          return sStart < slotMin + 30 && sEnd > slotMin;
         }).length;
 
         const shortage = required - assigned;
         if (shortage > 0) {
-          if (currentGapStart && currentShortage === shortage) {
-            // 連続スロットで同じ不足数 → 結合
-          } else {
-            if (currentGapStart) {
-              gaps.push({ startTime: currentGapStart, endTime: slot, shortage: currentShortage });
-            }
-            currentGapStart = slot;
-            currentShortage = shortage;
+          if (gapStart && gapShortage === shortage) { /* continue */ }
+          else {
+            if (gapStart) gaps.push({ startTime: gapStart, endTime: slot, shortage: gapShortage });
+            gapStart = slot;
+            gapShortage = shortage;
           }
         } else {
-          if (currentGapStart) {
-            gaps.push({ startTime: currentGapStart, endTime: slot, shortage: currentShortage });
-            currentGapStart = null;
-          }
+          if (gapStart) { gaps.push({ startTime: gapStart, endTime: slot, shortage: gapShortage }); gapStart = null; }
         }
       }
     }
-    if (currentGapStart) {
-      gaps.push({ startTime: currentGapStart, endTime: '24:00', shortage: currentShortage });
-    }
+    if (gapStart) gaps.push({ startTime: gapStart, endTime: '24:00', shortage: gapShortage });
     return gaps;
   }, [shifts, requirements]);
 
-  // --- ナビゲーション ---
+  // ナビゲーション
   const navigateDay = useCallback((direction: number) => {
     const d = new Date(currentDate + 'T00:00:00');
     d.setDate(d.getDate() + direction);
-    setCurrentDate(d.toISOString().slice(0, 10));
+    const newDate = d.toISOString().slice(0, 10);
+    setCurrentDate(newDate);
     setShowAddForm(false);
+    // URLも更新（リロードなし）
+    window.history.replaceState(null, '', `/dashboard/shift-adjust?date=${newDate}`);
   }, [currentDate]);
 
-  // --- 社員シフト追加 ---
+  // 社員追加
   const handleAddShift = useCallback(async () => {
     if (!user.id || !selectedStoreId) return;
     setSaving(true);
     try {
-      // ログインユーザーのstaffIdを取得（staffテーブルから）
       const staffRes = await fetch(`/api/staff?storeId=${selectedStoreId}`);
       const staffList = staffRes.ok ? await staffRes.json() : [];
-
-      // ユーザー名で検索（デモ用の簡易マッチ）
-      let staffId = staffList.find((s: { name: string; id: number }) => s.name === user.name)?.id;
-      if (!staffId && staffList.length > 0) {
-        // 社員で最初のを使う
-        const employee = staffList.find((s: { employmentType: string }) => s.employmentType === 'employee');
-        staffId = employee?.id || staffList[0].id;
-      }
-
+      let staffId = staffList.find((s: { name: string }) => s.name === user.name)?.id;
       if (!staffId) {
-        alert('スタッフ情報が見つかりません');
-        setSaving(false);
-        return;
+        const employee = staffList.find((s: { employmentType: string }) => s.employmentType === 'employee');
+        staffId = employee?.id || staffList[0]?.id;
       }
+      if (!staffId) { alert('スタッフ情報が見つかりません'); setSaving(false); return; }
 
       const res = await fetch('/api/shifts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          staffId,
-          storeId: parseInt(selectedStoreId),
-          date: currentDate,
-          startTime: addStartTime,
-          endTime: addEndTime,
+          staffId, storeId: parseInt(selectedStoreId), date: currentDate,
+          startTime: addStartTime, endTime: addEndTime,
         }),
       });
-
-      if (res.ok) {
-        setShowAddForm(false);
-        fetchDayData();
-      } else {
-        const error = await res.json();
-        alert(error.error || '登録に失敗しました');
-      }
+      if (res.ok) { setShowAddForm(false); fetchDayData(); }
+      else { const err = await res.json(); alert(err.error || '登録に失敗しました'); }
     } catch { alert('登録に失敗しました'); }
     finally { setSaving(false); }
   }, [user, selectedStoreId, currentDate, addStartTime, addEndTime, fetchDayData]);
 
-  // --- シフトが入っている人だけ ---
+  // シフトが入っている人のみ
   const activeShifts = useMemo(() =>
-    shifts.filter(s => s.staffName).sort((a, b) => timeToMinutes(a.startTime.slice(0, 5)) - timeToMinutes(b.startTime.slice(0, 5))),
+    shifts.filter(s => s.staffName).sort((a, b) => {
+      let aStart = timeToMinutes(a.startTime.slice(0, 5));
+      let bStart = timeToMinutes(b.startTime.slice(0, 5));
+      // 夜勤を後ろに
+      if (aStart >= 21 * 60) aStart -= TOTAL_MINUTES;
+      if (bStart >= 21 * 60) bStart -= TOTAL_MINUTES;
+      return aStart - bStart;
+    }),
     [shifts]
   );
 
-  // --- 必要人数バー ---
+  // 必要人数バー
   const requirementBar = useMemo(() => {
     const slots: { time: string; required: number; assigned: number }[] = [];
     for (let h = 0; h < 24; h++) {
@@ -242,11 +222,14 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
         const req = requirements.find(r => r.timeSlot === slot);
         const required = req ? req.requiredCount : 0;
         const slotMin = h * 60 + m;
-        const slotEnd = slotMin + 30;
         const assigned = shifts.filter(s => {
-          const sStart = timeToMinutes(s.startTime.slice(0, 5));
-          const sEnd = timeToMinutes(s.endTime.slice(0, 5));
-          return sStart < slotEnd && sEnd > slotMin;
+          let sStart = timeToMinutes(s.startTime.slice(0, 5));
+          let sEnd = timeToMinutes(s.endTime.slice(0, 5));
+          if (sEnd <= sStart) {
+            if (slotMin >= sStart || slotMin + 30 <= sEnd) return true;
+            return false;
+          }
+          return sStart < slotMin + 30 && sEnd > slotMin;
         }).length;
         slots.push({ time: slot, required, assigned });
       }
@@ -254,11 +237,54 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
     return slots;
   }, [shifts, requirements]);
 
+  /** シフトバーを描画（日跨ぎは2本に分割） */
+  const renderShiftBars = useCallback((shift: Shift) => {
+    const startMin = timeToMinutes(shift.startTime.slice(0, 5));
+    const endMin = timeToMinutes(shift.endTime.slice(0, 5));
+    const isEmployee = shift.staffEmploymentType === 'employee';
+    const barColor = isEmployee ? 'bg-[#34C759]' : 'bg-[#007AFF]';
+
+    if (endMin > startMin) {
+      // 通常シフト（日跨ぎなし）
+      const left = (startMin / TOTAL_MINUTES) * 100;
+      const width = ((endMin - startMin) / TOTAL_MINUTES) * 100;
+      const dur = endMin - startMin;
+      return (
+        <div key={shift.id} className={`absolute top-0.5 bottom-0.5 rounded-md flex items-center justify-center ${barColor}`}
+          style={{ left: `${left}%`, width: `${width}%` }}>
+          <span className="text-[10px] text-white font-medium truncate px-1">
+            {shift.startTime.slice(0, 5)}-{shift.endTime.slice(0, 5)} ({Math.floor(dur / 60)}h{dur % 60 > 0 ? `${dur % 60}m` : ''})
+          </span>
+        </div>
+      );
+    } else {
+      // 日跨ぎシフト（21:45-06:00等）→ 2本に分割
+      const dur = (TOTAL_MINUTES - startMin) + endMin;
+      const label = `${shift.startTime.slice(0, 5)}-${shift.endTime.slice(0, 5)} (${Math.floor(dur / 60)}h${dur % 60 > 0 ? `${dur % 60}m` : ''})`;
+
+      // 前半: startMin → 24:00
+      const left1 = (startMin / TOTAL_MINUTES) * 100;
+      const width1 = ((TOTAL_MINUTES - startMin) / TOTAL_MINUTES) * 100;
+      // 後半: 0:00 → endMin
+      const width2 = (endMin / TOTAL_MINUTES) * 100;
+
+      return (
+        <>
+          <div key={`${shift.id}-a`} className={`absolute top-0.5 bottom-0.5 rounded-l-md flex items-center justify-end ${barColor}`}
+            style={{ left: `${left1}%`, width: `${width1}%` }}>
+            <span className="text-[10px] text-white font-medium truncate px-1">{label}</span>
+          </div>
+          {endMin > 0 && (
+            <div key={`${shift.id}-b`} className={`absolute top-0.5 bottom-0.5 rounded-r-md ${barColor}`}
+              style={{ left: '0%', width: `${width2}%` }} />
+          )}
+        </>
+      );
+    }
+  }, []);
+
   return (
-    <DashboardLayout
-      user={user}
-      title="シフト微調整"
-      description="1日ずつ確認して社員シフトを追加"
+    <DashboardLayout user={user} title="シフト微調整" description="1日ずつ確認して社員シフトを追加"
       actions={stores.length > 1 ? (
         <Select value={selectedStoreId} onValueChange={setSelectedStoreId}>
           <SelectTrigger className="w-[180px] border-[#E5E5EA] bg-white"><SelectValue placeholder="店舗を選択" /></SelectTrigger>
@@ -266,25 +292,19 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
         </Select>
       ) : undefined}
     >
-      {/* 日付ナビゲーション */}
+      {/* 日付ナビ */}
       <div className="flex items-center justify-between mb-4">
-        <Button variant="outline" onClick={() => navigateDay(-1)} className="rounded-xl">
-          <ChevronLeft className="w-5 h-5" />
+        <Button variant="outline" onClick={() => navigateDay(-1)} className="rounded-xl h-12 w-12">
+          <ChevronLeft className="w-6 h-6" />
         </Button>
         <div className="text-center">
-          <h2 className={`text-2xl font-bold ${
-            dayOfWeek === 0 ? 'text-[#FF3B30]' : dayOfWeek === 6 ? 'text-[#007AFF]' : 'text-[#1D1D1F]'
-          }`}>
+          <h2 className={`text-2xl font-bold ${dayOfWeek === 0 ? 'text-[#FF3B30]' : dayOfWeek === 6 ? 'text-[#007AFF]' : 'text-[#1D1D1F]'}`}>
             {dateLabel}
           </h2>
-          {periodStart && periodEnd && (
-            <p className="text-xs text-[#86868B]">
-              期間: {periodStart.slice(5).replace('-', '/')} 〜 {periodEnd.slice(5).replace('-', '/')}
-            </p>
-          )}
+          <p className="text-xs text-[#86868B]">期間: {periodLabel}</p>
         </div>
-        <Button variant="outline" onClick={() => navigateDay(1)} className="rounded-xl">
-          <ChevronRight className="w-5 h-5" />
+        <Button variant="outline" onClick={() => navigateDay(1)} className="rounded-xl h-12 w-12">
+          <ChevronRight className="w-6 h-6" />
         </Button>
       </div>
 
@@ -300,9 +320,7 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
               </h3>
               <div className="space-y-1">
                 {gapMessages.map((g, i) => (
-                  <p key={i} className="text-sm text-[#FF3B30]">
-                    {g.startTime}〜{g.endTime} あと{g.shortage}人
-                  </p>
+                  <p key={i} className="text-sm text-[#FF3B30]">{g.startTime}〜{g.endTime} あと{g.shortage}人</p>
                 ))}
               </div>
             </div>
@@ -316,20 +334,20 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
 
           {/* タイムライン */}
           <PageSection className="overflow-x-auto">
-            {/* 必要人数ヘッダー */}
-            <div className="min-w-[600px]">
-              {/* 時間軸 */}
-              <div className="flex items-end mb-1" style={{ marginLeft: '120px' }}>
+            <div className="min-w-[700px]">
+              {/* 1時間刻みの時間軸 */}
+              <div className="flex items-end mb-1" style={{ marginLeft: '110px' }}>
                 {HOUR_LABELS.map(h => (
-                  <div key={h} className="text-[10px] text-[#86868B]" style={{ width: `${(3 * 60 / TOTAL_MINUTES) * 100}%` }}>
+                  <div key={h} className="text-[9px] text-[#86868B] border-l border-[#E5E5EA]/50"
+                    style={{ width: `${(1 / 24) * 100}%`, paddingLeft: '2px' }}>
                     {String(h).padStart(2, '0')}
                   </div>
                 ))}
               </div>
 
-              {/* 必要人数 vs 配置人数バー */}
+              {/* 必要人数バー */}
               <div className="flex items-center mb-3">
-                <div className="w-[120px] flex-shrink-0 pr-2">
+                <div className="w-[110px] flex-shrink-0 pr-2">
                   <span className="text-[10px] text-[#86868B]">必要人数</span>
                 </div>
                 <div className="flex-1 flex h-5 rounded-md overflow-hidden bg-[#F5F5F7]">
@@ -337,17 +355,15 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
                     const isFull = slot.assigned >= slot.required;
                     const isEmpty = slot.required === 0;
                     return (
-                      <div
-                        key={i}
-                        className={`h-full border-r border-white/30 flex items-center justify-center ${
-                          isEmpty ? 'bg-[#F5F5F7]' :
-                          isFull ? 'bg-[#34C759]/30' : 'bg-[#FF3B30]/20'
+                      <div key={i}
+                        className={`h-full flex items-center justify-center ${
+                          isEmpty ? 'bg-[#F5F5F7]' : isFull ? 'bg-[#34C759]/30' : 'bg-[#FF3B30]/20'
                         }`}
-                        style={{ width: `${(1 / 48) * 100}%` }}
+                        style={{ width: `${(1 / 48) * 100}%`, borderRight: i % 2 === 1 ? '1px solid rgba(0,0,0,0.05)' : 'none' }}
                         title={`${slot.time}: ${slot.assigned}/${slot.required}人`}
                       >
                         {i % 2 === 0 && slot.required > 0 && (
-                          <span className={`text-[8px] font-bold ${isFull ? 'text-[#34C759]' : 'text-[#FF3B30]'}`}>
+                          <span className={`text-[7px] font-bold ${isFull ? 'text-[#34C759]' : 'text-[#FF3B30]'}`}>
                             {slot.assigned}/{slot.required}
                           </span>
                         )}
@@ -361,32 +377,15 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
               {activeShifts.length > 0 ? (
                 <div className="space-y-1.5">
                   {activeShifts.map(shift => {
-                    const startMin = timeToMinutes(shift.startTime.slice(0, 5));
-                    const endMin = timeToMinutes(shift.endTime.slice(0, 5));
-                    const leftPercent = (startMin / TOTAL_MINUTES) * 100;
-                    const widthPercent = ((endMin > startMin ? endMin - startMin : endMin + TOTAL_MINUTES - startMin) / TOTAL_MINUTES) * 100;
                     const isEmployee = shift.staffEmploymentType === 'employee';
-                    const duration = endMin > startMin ? endMin - startMin : endMin + TOTAL_MINUTES - startMin;
-                    const hours = Math.floor(duration / 60);
-                    const mins = duration % 60;
-
                     return (
                       <div key={shift.id} className="flex items-center">
-                        <div className="w-[120px] flex-shrink-0 pr-2">
+                        <div className="w-[110px] flex-shrink-0 pr-2">
                           <p className="text-sm font-medium text-[#1D1D1F] truncate">{shift.staffName}</p>
                           <p className="text-[10px] text-[#86868B]">{isEmployee ? '社員' : 'バイト'}</p>
                         </div>
                         <div className="flex-1 relative h-8 bg-[#F5F5F7] rounded-md">
-                          <div
-                            className={`absolute top-0.5 bottom-0.5 rounded-md flex items-center justify-center ${
-                              isEmployee ? 'bg-[#34C759]' : 'bg-[#007AFF]'
-                            }`}
-                            style={{ left: `${leftPercent}%`, width: `${widthPercent}%` }}
-                          >
-                            <span className="text-[10px] text-white font-medium truncate px-1">
-                              {shift.startTime.slice(0, 5)}-{shift.endTime.slice(0, 5)} ({hours}h{mins > 0 ? `${mins}m` : ''})
-                            </span>
-                          </div>
+                          {renderShiftBars(shift)}
                         </div>
                       </div>
                     );
@@ -415,12 +414,9 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
                     <Select value={addStartTime} onValueChange={setAddStartTime}>
                       <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        {Array.from({ length: 48 }, (_, i) => {
-                          const h = Math.floor(i / 2);
-                          const m = i % 2 === 0 ? '00' : '30';
-                          const t = `${String(h).padStart(2, '0')}:${m}`;
-                          return <SelectItem key={t} value={t}>{t}</SelectItem>;
-                        })}
+                        {TIME_OPTIONS.filter(t => t !== '24:00').map(t => (
+                          <SelectItem key={t} value={t}>{t}</SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>
@@ -430,18 +426,14 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
                     <Select value={addEndTime} onValueChange={setAddEndTime}>
                       <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        {Array.from({ length: 48 }, (_, i) => {
-                          const h = Math.floor((i + 1) / 2);
-                          const m = (i + 1) % 2 === 0 ? '00' : '30';
-                          const t = i === 47 ? '24:00' : `${String(h).padStart(2, '0')}:${m}`;
-                          return <SelectItem key={t} value={t}>{t}</SelectItem>;
-                        })}
+                        {TIME_OPTIONS.filter(t => t !== '00:00').map(t => (
+                          <SelectItem key={t} value={t}>{t}</SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>
                 </div>
 
-                {/* 不足時間帯のクイック選択 */}
                 {gapMessages.length > 0 && (
                   <div className="mb-4">
                     <p className="text-xs text-[#86868B] mb-2">不足時間帯をタップで選択:</p>
@@ -467,8 +459,8 @@ export function ShiftAdjustContent({ user }: { user: SessionUser }) {
           </div>
 
           {/* 次の日ボタン */}
-          <div className="mt-4">
-            <Button onClick={() => navigateDay(1)} variant="outline" className="w-full rounded-xl h-12 text-base border-[#007AFF] text-[#007AFF] hover:bg-[#007AFF]/5">
+          <div className="mt-4 mb-8">
+            <Button onClick={() => navigateDay(1)} className="w-full rounded-xl h-14 text-lg bg-[#007AFF] hover:bg-[#0056CC] text-white">
               次の日へ <ChevronRight className="w-5 h-5 ml-1" />
             </Button>
           </div>
